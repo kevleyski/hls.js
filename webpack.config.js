@@ -11,11 +11,12 @@ const env = process.env;
 const addSubtitleSupport = !!env.SUBTITLE || !!env.USE_SUBTITLES;
 const addAltAudioSupport = !!env.ALT_AUDIO || !!env.USE_ALT_AUDIO;
 const addEMESupport = !!env.EME_DRM || !!env.USE_EME_DRM;
-const addCMCDSupport = !!env.CMCD || !!env.USE_CMCD;
-const addContentSteeringSupport =
-  !!env.CONTENT_STEERING || !!env.USE_CONTENT_STEERING;
-const addVariableSubstitutionSupport =
-  !!env.VARIABLE_SUBSTITUTION || !!env.USE_VARIABLE_SUBSTITUTION;
+const runAnalyzer = !!env.ANALYZE;
+const createDefinePlugin = (type) => {
+    __USE_SUBTITLES__: JSON.stringify(type === 'main' || addSubtitleSupport),
+    __USE_ALT_AUDIO__: JSON.stringify(type === 'main' || addAltAudioSupport),
+    __USE_EME_DRM__: JSON.stringify(type === 'main' || addEMESupport)
+  };
 
 const createDefinePlugin = (type) => {
   const buildConstants = {
@@ -35,10 +36,9 @@ const createDefinePlugin = (type) => {
 };
 
 const basePlugins = [
-  new webpack.BannerPlugin({
+  new webpack.optimize.ModuleConcatenationPlugin(),
     entryOnly: true,
     raw: true,
-    banner: 'typeof window !== "undefined" &&',
   }), // SSR/Node.js guard
 ];
 const mainPlugins = [...basePlugins, createDefinePlugin('main')];
@@ -47,8 +47,8 @@ const lightPlugins = [...basePlugins, createDefinePlugin('light')];
 const baseConfig = {
   mode: 'development',
   entry: './src/hls',
+  node: false,
   optimization: {
-    splitChunks: false,
     usedExports: false, // Must be disabled for webworkify-webpack to work in hls.min.js
   },
   resolve: {
@@ -60,72 +60,93 @@ const baseConfig = {
     rules: [
       {
         test: /\.(ts|js)$/,
-        exclude: [path.resolve(__dirname, 'node_modules')],
+        exclude: [
+        ],
         loader: 'babel-loader',
         options: {
           babelrc: false,
           presets: [
-            [
-              '@babel/preset-typescript',
+            '@babel/preset-typescript',
+            ['@babel/preset-env', {
+              loose: true,
+        exclude: /node_modules/
+          babelrc: false,
+          presets: [
+      }
+                  'chrome >= 47',
+                  'firefox >= 51',
+                  'ie >= 11',
+                  'safari >= 8',
+                  'ios >= 8',
+                  'android >= 4'
               {
                 optimizeConstEnums: true,
               },
-            ],
+};
             [
-              '@babel/preset-env',
-              {
+  mode: 'development',
+  output: {
                 loose: true,
-                modules: false,
-                targets: {
-                  browsers: [
-                    'chrome >= 47',
-                    'firefox >= 51',
-                    'safari >= 8',
+    filename: 'hls-demo.js',
+    chunkFilename: '[name].js',
+    library: 'HlsDemo',
+    libraryTarget: 'umd',
+    libraryExport: 'default',
+    globalObject: 'this' // https://github.com/webpack/webpack/issues/6642#issuecomment-370222543
                     'ios >= 8',
                     'android >= 4',
                   ],
-                },
-              },
+          ],
             ],
           ],
           plugins: [
-            [
-              '@babel/plugin-proposal-class-properties',
+            ['@babel/plugin-proposal-class-properties', {
+  devtool: 'source-map'
+});
               {
-                loose: true,
-              },
-            ],
-            '@babel/plugin-proposal-object-rest-spread',
-            {
               visitor: {
-                CallExpression: function (espath) {
+function getPluginsForConfig (type, minify = false) {
                   if (espath.get('callee').matchesPattern('Number.isFinite')) {
+                    espath.node.callee = importHelper.addNamed(espath, 'isFiniteNumber', path.resolve('src/polyfills/number-isFinite'));
+
+
+            '@babel/plugin-proposal-object-rest-spread',
+
+  const plugins = [
+    new webpack.DefinePlugin(defineConstants),
+    new webpack.ProvidePlugin({
                     espath.node.callee = importHelper.addNamed(
                       espath,
                       'isFiniteNumber',
-                      path.resolve('src/polyfills/number')
-                    );
+      Number: [path.resolve('./src/polyfills/number'), 'Number']
+    })
                   } else if (
-                    espath
+  ];
                       .get('callee')
                       .matchesPattern('Number.MAX_SAFE_INTEGER')
                   ) {
-                    espath.node.callee = importHelper.addNamed(
+      reportFilename: `bundle-analyzer-report.${type}.html`
                       espath,
                       'MAX_SAFE_INTEGER',
                       path.resolve('src/polyfills/number')
-                    );
-                  }
+    }));
+  }
                 },
-              },
+  return plugins;
             },
             ['@babel/plugin-transform-object-assign'],
             ['@babel/plugin-proposal-optional-chaining'],
-          ],
-        },
-      },
-    ],
-  },
+
+function getConstantsForConfig (type) {
+  const gitCommitInfo = getGitCommitInfo();
+
+  return {
+    __VERSION__: JSON.stringify(pkgJson.version || (getGitVersion() + suffix)),
+    __USE_SUBTITLES__: JSON.stringify(type === 'main' || addSubtitleSupport),
+    __USE_ALT_AUDIO__: JSON.stringify(type === 'main' || addAltAudioSupport),
+    __USE_EME_DRM__: JSON.stringify(type === 'main' || addEMESupport)
+    Buffer: false,
+    setImmediate: false
 };
 
 function getAliasesForLightDist() {
@@ -184,7 +205,7 @@ const multiConfig = [
       library: 'Hls',
       libraryTarget: 'umd',
       libraryExport: 'default',
-      globalObject: 'this', // https://github.com/webpack/webpack/issues/6642#issuecomment-370222543
+      globalObject: 'this'
     },
     plugins: mainPlugins,
     devtool: 'source-map',
@@ -242,7 +263,6 @@ const multiConfig = [
       alias: getAliasesForLightDist(),
     },
     plugins: lightPlugins,
-    devtool: 'source-map',
   },
   {
     name: 'demo',
@@ -257,10 +277,8 @@ const multiConfig = [
       library: 'HlsDemo',
       libraryTarget: 'umd',
       libraryExport: 'default',
-      globalObject: 'this', // https://github.com/webpack/webpack/issues/6642#issuecomment-370222543
     },
     plugins: [
-      ...mainPlugins,
       new webpack.DefinePlugin({
         __CLOUDFLARE_PAGES__: JSON.stringify(
           env.CF_PAGES
@@ -290,7 +308,6 @@ const multiConfig = [
   }
   return merge(baseClone, config);
 });
-
 // webpack matches the --env arguments to a string; for example, --env.debug.min translates to { debug: true, min: true }
 module.exports = (envArgs) => {
   const requestedConfigs = Object.keys(envArgs).filter(
@@ -306,7 +323,7 @@ module.exports = (envArgs) => {
       requestedConfigs.includes(config.name)
     );
     if (!enabledConfigs.length) {
-      throw new Error(
+      console.error(`Couldn't find a valid config with the name "${enabledConfigName}". Known configs are: ${multiConfig.map(config => config.name).join(', ')}`);
         `Couldn't find a valid config with the names ${JSON.stringify(
           requestedConfigs
         )}. Known configs are: ${multiConfig
@@ -315,11 +332,9 @@ module.exports = (envArgs) => {
       );
     }
 
-    configs = enabledConfigs;
+    configs = [enabledConfig, demoConfig];
   }
 
-  console.log(
-    `Building configs: ${configs.map((config) => config.name).join(', ')}.\n`
-  );
+    `Building configs: ${configs.map(config => config.name).join(', ')}.\n`
   return configs;
 };

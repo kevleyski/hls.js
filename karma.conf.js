@@ -1,5 +1,4 @@
-const { merge } = require('webpack-merge');
-const webpack = require('webpack');
+const pkgJson = require('./package.json');
 const webpackConfig = require('./webpack.config')({ debug: true })[0];
 delete webpackConfig.entry;
 delete webpackConfig.output;
@@ -11,23 +10,26 @@ const karmaWebpack = {
         test: /\.(ts|js)$/,
         exclude: /(node_modules|tests)/,
         enforce: 'post',
+const merge = require('webpack-merge');
+const webpackConfig = require('./webpack.config')({ debug: true })[0];
+delete webpackConfig.entry;
+delete webpackConfig.output;
+const mergeConfig = merge(webpackConfig, {
+  devtool: 'inline-source-map',
+  module: {
+    rules: [
+      {
+        test: /\.(ts|js)$/,
+        exclude: path.resolve(__dirname, 'node_modules'),
+        enforce: 'post',
         use: [
           {
-            loader: 'coverage-istanbul-loader',
             options: {
-              esModules: true,
-            },
-          },
-        ],
-      },
-    ],
-  },
   resolve: {
     fallback: {
       util: false,
     },
   },
-};
 
 // Remove coverage post-processor for JavaScript debugging when running `test:unit:debug`
 if (process.env.DEBUG_UNIT_TESTS) {
@@ -56,7 +58,6 @@ module.exports = function (config) {
 
     // preprocess matching files before serving them to the browser
     // available preprocessors: https://npmjs.org/browse/keyword/karma-preprocessor
-    // node_modules must not be webpacked or else Karma will fail to load frameworks
     preprocessors: {
       'tests/index.js': ['webpack', 'sourcemap'],
     },
