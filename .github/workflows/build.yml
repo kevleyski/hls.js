@@ -24,7 +24,7 @@ jobs:
         id: check_sauce_access
         run: |
           if ! [[ -z "$SAUCE_USERNAME" ]] && ! [[ -z "$SAUCE_ACCESS_KEY" ]]; then
-            echo "::set-output name=result::true"
+            echo "result=true" >> $GITHUB_OUTPUT
           fi
         env:
           CI: true
@@ -50,7 +50,6 @@ jobs:
           fetch-depth: 0
 
       - name: check package-lock.json version
-        id: extract_tag
         uses: actions/github-script@v6
         with:
           script: |
@@ -266,6 +265,8 @@ jobs:
     needs: [config, test_unit]
     if: needs.config.outputs.tag || needs.config.outputs.isMainBranch == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v3
 
@@ -353,7 +354,7 @@ jobs:
           name: build
 
       - name: start SauceConnect tunnel
-        uses: saucelabs/sauce-connect-action@b632f7b7d4c5fce8bac327911322b033330b04ab
+        uses: saucelabs/sauce-connect-action@270345f214aca56f55c678ca59e626dfd43da153
         with:
           username: ${{ secrets.SAUCE_USERNAME }}
           accessKey: ${{ secrets.SAUCE_ACCESS_KEY }}
@@ -422,7 +423,7 @@ jobs:
           name: build
 
       - name: start SauceConnect tunnel
-        uses: saucelabs/sauce-connect-action@b632f7b7d4c5fce8bac327911322b033330b04ab
+        uses: saucelabs/sauce-connect-action@270345f214aca56f55c678ca59e626dfd43da153
         with:
           username: ${{ secrets.SAUCE_USERNAME }}
           accessKey: ${{ secrets.SAUCE_ACCESS_KEY }}

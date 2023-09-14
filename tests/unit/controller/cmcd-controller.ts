@@ -2,7 +2,7 @@ import CMCDController from '../../../src/controller/cmcd-controller';
 import HlsMock from '../../mocks/hls.mock';
 import type { CMCDControllerConfig } from '../../../src/config';
 
-import * as chai from 'chai';
+import chai from 'chai';
 
 const expect = chai.expect;
 
@@ -51,7 +51,7 @@ describe('CMCDController', function () {
     it('appends with ?', function () {
       const result = CMCDController.appendQueryToUri(
         'http://test.com',
-        'CMCD=d%3D6067'
+        'CMCD=d%3D6067',
       );
       expect(result).to.equal('http://test.com?CMCD=d%3D6067');
     });
@@ -59,7 +59,7 @@ describe('CMCDController', function () {
     it('appends with &', function () {
       const result = CMCDController.appendQueryToUri(
         'http://test.com?testing=123',
-        'CMCD=d%3D6067'
+        'CMCD=d%3D6067',
       );
       expect(result).to.equal('http://test.com?testing=123&CMCD=d%3D6067');
     });

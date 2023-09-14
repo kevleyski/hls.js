@@ -12,7 +12,6 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [Fourth step: control through `<video>` element](#fourth-step-control-through-video-element)
   - [Fifth step: error handling](#fifth-step-error-handling)
     - [Fatal Error Recovery](#fatal-error-recovery)
-      - [`hls.startLoad()`](#hlsstartload)
       - [`hls.recoverMediaError()`](#hlsrecovermediaerror)
         - [Error recovery sample code](#error-recovery-sample-code)
       - [`hls.swapAudioCodec()`](#hlsswapaudiocodec)
@@ -29,6 +28,7 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`initialLiveManifestSize`](#initiallivemanifestsize)
   - [`maxBufferLength`](#maxbufferlength)
   - [`backBufferLength`](#backbufferlength)
+  - [`frontBufferFlushThreshold`](#frontbufferflushthreshold)
   - [`maxBufferSize`](#maxbuffersize)
   - [`maxBufferHole`](#maxbufferhole)
   - [`maxStarvationDelay`](#maxstarvationdelay)
@@ -47,12 +47,25 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`liveDurationInfinity`](#livedurationinfinity)
   - [`liveBackBufferLength` (deprecated)](#livebackbufferlength-deprecated)
   - [`enableWorker`](#enableworker)
+  - [`workerPath`](#workerpath)
   - [`enableSoftwareAES`](#enablesoftwareaes)
   - [`startLevel`](#startlevel)
-  - [`fragLoadingTimeOut` / `manifestLoadingTimeOut` / `levelLoadingTimeOut`](#fragloadingtimeout--manifestloadingtimeout--levelloadingtimeout)
-  - [`fragLoadingMaxRetry` / `manifestLoadingMaxRetry` / `levelLoadingMaxRetry`](#fragloadingmaxretry--manifestloadingmaxretry--levelloadingmaxretry)
-  - [`fragLoadingMaxRetryTimeout` / `manifestLoadingMaxRetryTimeout` / `levelLoadingMaxRetryTimeout`](#fragloadingmaxretrytimeout--manifestloadingmaxretrytimeout--levelloadingmaxretrytimeout)
-  - [`fragLoadingRetryDelay` / `manifestLoadingRetryDelay` / `levelLoadingRetryDelay`](#fragloadingretrydelay--manifestloadingretrydelay--levelloadingretrydelay)
+  - [`fragLoadingTimeOut` / `manifestLoadingTimeOut` / `levelLoadingTimeOut` (deprecated)](#fragloadingtimeout--manifestloadingtimeout--levelloadingtimeout-deprecated)
+  - [`fragLoadingMaxRetry` / `manifestLoadingMaxRetry` / `levelLoadingMaxRetry` (deprecated)](#fragloadingmaxretry--manifestloadingmaxretry--levelloadingmaxretry-deprecated)
+  - [`fragLoadingMaxRetryTimeout` / `manifestLoadingMaxRetryTimeout` / `levelLoadingMaxRetryTimeout` (deprecated)](#fragloadingmaxretrytimeout--manifestloadingmaxretrytimeout--levelloadingmaxretrytimeout-deprecated)
+  - [`fragLoadingRetryDelay` / `manifestLoadingRetryDelay` / `levelLoadingRetryDelay` (deprecated)](#fragloadingretrydelay--manifestloadingretrydelay--levelloadingretrydelay-deprecated)
+  - [`fragLoadPolicy` / `keyLoadPolicy` / `certLoadPolicy` / `playlistLoadPolicy` / `manifestLoadPolicy` / `steeringManifestLoadPolicy`](#fragloadpolicy--keyloadpolicy--certloadpolicy--playlistloadpolicy--manifestloadpolicy--steeringmanifestloadpolicy)
+    - [`LoaderConfig`](#loaderconfig)
+      - [`maxTimeToFirstByteMs: number`](#maxtimetofirstbytems-number)
+      - [`maxLoadTimeMs: number`](#maxloadtimems-number)
+      - [`timeoutRetry: RetryConfig | null`](#timeoutretry-retryconfig--null)
+      - [`errorRetry: RetryConfig | null`](#errorretry-retryconfig--null)
+    - [`RetryConfig`](#retryconfig)
+      - [`maxNumRetry: number`](#maxnumretry-number)
+      - [`retryDelayMs: number`](#retrydelayms-number)
+      - [`maxRetryDelayMs: number`](#maxretrydelayms-number)
+      - [`backoff?: 'exponential' | 'linear'`](#backoff-exponential--linear)
+      - [`shouldRetry`](#shouldretry)
   - [`startFragPrefetch`](#startfragprefetch)
   - [`testBandwidth`](#testbandwidth)
   - [`progressive`](#progressive)
@@ -93,6 +106,7 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`abrEwmaFastVoD`](#abrewmafastvod)
   - [`abrEwmaSlowVoD`](#abrewmaslowvod)
   - [`abrEwmaDefaultEstimate`](#abrewmadefaultestimate)
+  - [`abrEwmaDefaultEstimateMax`](#abrewmadefaultestimatemax)
   - [`abrBandWidthFactor`](#abrbandwidthfactor)
   - [`abrBandWidthUpFactor`](#abrbandwidthupfactor)
   - [`abrMaxWithRealBitrate`](#abrmaxwithrealbitrate)
@@ -117,6 +131,7 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`hls.loadLevel`](#hlsloadlevel)
   - [`hls.nextLoadLevel`](#hlsnextloadlevel)
   - [`hls.firstLevel`](#hlsfirstlevel)
+  - [`hls.firstAutoLevel`](#hlsfirstautolevel)
   - [`hls.startLevel`](#hlsstartlevel)
   - [`hls.autoLevelEnabled`](#hlsautolevelenabled)
   - [`hls.autoLevelCapping`](#hlsautolevelcapping)
@@ -162,16 +177,16 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
 
 ### First step: setup and support
 
-First include `https://cdn.jsdelivr.net/npm/hls.js@latest` (or `/hls.js` for unminified) in your web page.
+First include `https://cdn.jsdelivr.net/npm/hls.js@1` (or `/hls.js` for unminified) in your web page.
 
 ```html
-<script src="//cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="//cdn.jsdelivr.net/npm/hls.js@1"></script>
 ```
 
 Invoke the following static method: `Hls.isSupported()` to check whether your browser is supporting [MediaSource Extensions](http://w3c.github.io/media-source/).
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
   if (Hls.isSupported()) {
     console.log('hello hls.js!');
@@ -188,13 +203,19 @@ Let's
 - bind video element to this HLS object
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 
 <video id="video"></video>
 <script>
   if (Hls.isSupported()) {
     var video = document.getElementById('video');
+
+    // If you are using the ESM version of the library (hls.mjs), you
+    // should specify the "workerPath" config option here if you want
+    // web workers to be used. Note that bundlers (such as webpack)
+    // will likely use the ESM version by default.
     var hls = new Hls();
+
     // bind them together
     hls.attachMedia(video);
     // MEDIA_ATTACHED event is fired by hls object once MediaSource is ready
@@ -210,7 +231,7 @@ Let's
 You need to provide manifest URL as below:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 
 <video id="video"></video>
 <script>
@@ -222,7 +243,7 @@ You need to provide manifest URL as below:
     });
     hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
       console.log(
-        'manifest loaded, found ' + data.levels.length + ' quality level'
+        'manifest loaded, found ' + data.levels.length + ' quality level',
       );
     });
     hls.loadSource('http://my.streamURL.com/playlist.m3u8');
@@ -246,17 +267,19 @@ video.play();
 
 All errors are signalled through a unique single event.
 
-Each error is categorized by:
+Each error is categorized by an error type, error details, and whether or not is is `fatal`:
 
-- its type:
+- Error Types:
   - `Hls.ErrorTypes.NETWORK_ERROR` for network related errors
   - `Hls.ErrorTypes.MEDIA_ERROR` for media/video related errors
+  - `Hls.ErrorTypes.KEY_SYSTEM_ERROR` for EME related errors
+  - `Hls.ErrorTypes.MUX_ERROR` for demuxing/remuxing related errors
   - `Hls.ErrorTypes.OTHER_ERROR` for all other errors
-- its details:
+- Error Details:
   - refer to [Errors details](#Errors)
-- its fatality:
-  - `false` if error is not fatal, hls.js will try to recover it
-  - `true` if error is fatal, an action is required to (try to) recover it.
+- Error is `fatal`:
+  - `false` if error is not fatal, hls.js will try to recover.
+  - `true` if error is fatal, all attempts to recover have been performed. See [LoadPolicies](#fragloadpolicy--keyloadpolicy--certloadpolicy--playlistloadpolicy--manifestloadpolicy--steeringmanifestloadpolicy) details on how to configure retries.
 
 Full details are described [below](#Errors)
 
@@ -280,11 +303,7 @@ hls.on(Hls.Events.ERROR, function (event, data) {
 
 #### Fatal Error Recovery
 
-hls.js provides means to 'try to' recover fatal network and media errors, through these 2 methods:
-
-##### `hls.startLoad()`
-
-Should be invoked to recover network error.
+hls.js provides means to 'try to' recover fatal media errors, through these methods:
 
 ##### `hls.recoverMediaError()`
 
@@ -296,14 +315,16 @@ Should be invoked to recover media error.
 hls.on(Hls.Events.ERROR, function (event, data) {
   if (data.fatal) {
     switch (data.type) {
-      case Hls.ErrorTypes.NETWORK_ERROR:
-        // try to recover network error
-        console.log('fatal network error encountered, try to recover');
-        hls.startLoad();
-        break;
       case Hls.ErrorTypes.MEDIA_ERROR:
         console.log('fatal media error encountered, try to recover');
         hls.recoverMediaError();
+        break;
+      case Hls.ErrorTypes.NETWORK_ERROR:
+        console.error('fatal network error encountered', data);
+        // All retries and media options have been exhausted.
+        // Immediately trying to restart loading could cause loop loading.
+        // Consider modifying loading policies to best fit your asset and network
+        // conditions (manifestLoadPolicy, playlistLoadPolicy, fragLoadPolicy).
         break;
       default:
         // cannot recover
@@ -344,6 +365,7 @@ var config = {
   maxBufferLength: 30,
   maxMaxBufferLength: 600,
   backBufferLength: Infinity,
+  frontBufferFlushThreshold: Infinity,
   maxBufferSize: 60 * 1000 * 1000,
   maxBufferHole: 0.5,
   highBufferWatchdogPeriod: 2,
@@ -399,6 +421,7 @@ var config = {
   abrEwmaFastVoD: 3.0,
   abrEwmaSlowVoD: 9.0,
   abrEwmaDefaultEstimate: 500000,
+  abrEwmaDefaultEstimateMax: 5000000,
   abrBandWidthFactor: 0.95,
   abrBandWidthUpFactor: 0.7,
   abrMaxWithRealBitrate: false,
@@ -496,6 +519,12 @@ This is the guaranteed buffer length hls.js will try to reach, regardless of max
 (default: `Infinity`)
 
 The maximum duration of buffered media to keep once it has been played, in seconds. Any video buffered past this duration will be evicted. `Infinity` means no restriction on back buffer length; `0` keeps the minimum amount. The minimum amount is equal to the target duration of a segment to ensure that current playback is not interrupted.
+
+### `frontBufferFlushThreshold`
+
+(default: `Infinity`)
+
+The maximum duration of buffered media, in seconds, from the play position to keep before evicting non-contiguous forward ranges. A value of `Infinity` means no active eviction will take place; This value will always be at least the `maxBufferLength`.
 
 ### `maxBufferSize`
 
@@ -649,6 +678,14 @@ If you want to have a native Live UI in environments like iOS Safari, Safari, An
 
 Enable WebWorker (if available on browser) for TS demuxing/MP4 remuxing, to improve performance and avoid lag/frame drops.
 
+### `workerPath`
+
+(default: `null`)
+
+Provide a path to hls.worker.js as an alternative to injecting the worker based on the iife library wrapper function. When `workerPath` is defined as a string, the transmuxer interface will initialize a WebWorker using the resolved `workerPath` URL.
+
+When using the ESM version of the library (hls.mjs), this option is required in order for web workers to be used.
+
 ### `enableSoftwareAES`
 
 (default: `true`)
@@ -661,36 +698,201 @@ Enable to use JavaScript version AES decryption for fallback of WebCrypto API.
 
 When set, use this level as the default hls.startLevel. Keep in mind that the startLevel set with the API takes precedence over config.startLevel configuration parameter.
 
-### `fragLoadingTimeOut` / `manifestLoadingTimeOut` / `levelLoadingTimeOut`
+### `fragLoadingTimeOut` / `manifestLoadingTimeOut` / `levelLoadingTimeOut` (deprecated)
 
 (default: 20000ms for fragment / 10000ms for level and manifest)
 
-URL Loader timeout.
-A timeout callback will be triggered if loading duration exceeds this timeout.
-no further action will be done : the load operation will not be cancelled/aborted.
-It is up to the application to catch this event and treat it as needed.
+x-LoadingTimeOut settings have been deprecated. Use one of the LoadPolicy settings instead.
 
-### `fragLoadingMaxRetry` / `manifestLoadingMaxRetry` / `levelLoadingMaxRetry`
+### `fragLoadingMaxRetry` / `manifestLoadingMaxRetry` / `levelLoadingMaxRetry` (deprecated)
 
 (default: `6` / `1` / `4`)
 
-Max number of load retries.
+x-LoadingMaxRetry settings have been deprecated. Use one of the LoadPolicy settings instead.
 
-### `fragLoadingMaxRetryTimeout` / `manifestLoadingMaxRetryTimeout` / `levelLoadingMaxRetryTimeout`
+### `fragLoadingMaxRetryTimeout` / `manifestLoadingMaxRetryTimeout` / `levelLoadingMaxRetryTimeout` (deprecated)
 
 (default: `64000` ms)
 
-Maximum frag/manifest/key retry timeout (in milliseconds) in case I/O errors are met.
+x-LoadingMaxRetryTimeout settings have been deprecated. Use one of the LoadPolicy settings instead.
+
+Maximum frag/manifest/key retry timeout (in milliseconds).
 This value is used as capping value for exponential grow of `loading retry delays`, i.e. the retry delay can not be bigger than this value, but overall time will be based on the overall number of retries.
 
-### `fragLoadingRetryDelay` / `manifestLoadingRetryDelay` / `levelLoadingRetryDelay`
+### `fragLoadingRetryDelay` / `manifestLoadingRetryDelay` / `levelLoadingRetryDelay` (deprecated)
 
 (default: `1000` ms)
+
+x-LoadingRetryDelay settings have been deprecated. Use one of the LoadPolicy settings instead.
 
 Initial delay between `XMLHttpRequest` error and first load retry (in ms).
 Any I/O error will trigger retries every 500ms,1s,2s,4s,8s, ... capped to `fragLoadingMaxRetryTimeout` / `manifestLoadingMaxRetryTimeout` / `levelLoadingMaxRetryTimeout` value (exponential backoff).
 
-Prefetch start fragment although media not attached.
+### `fragLoadPolicy` / `keyLoadPolicy` / `certLoadPolicy` / `playlistLoadPolicy` / `manifestLoadPolicy` / `steeringManifestLoadPolicy`
+
+LoadPolicies specify the default settings for request timeouts and the timing and number of retries after a request error or timeout for a particular type of asset.
+
+- `manifestLoadPolicy`: The `LoadPolicy` for Multivariant Playlist requests
+- `playlistLoadPolicy`: The `LoadPolicy` for Media Playlist requests
+- `fragLoadPolicy`: The `LoadPolicy` for Segment and Part\* requests
+- `keyLoadPolicy`: The `LoadPolicy` for Key requests
+- `certLoadPolicy`: The `LoadPolicy` for License Server certificate requests
+- `steeringManifestLoadPolicy`: The `LoadPolicy` for Content Steering manifest requests
+
+\*Some timeout settings are adjusted for Low-Latency Part requests based on Part duration or target.
+
+Each `LoadPolicy` contains a set of contexts. The `default` property is the only context supported at this time. It contains the `LoaderConfig` for that asset type. Future releases may include support for other policy contexts besides `default`.
+
+HLS.js config defines the following default policies. Each can be overridden on player instantiation in the user configuration:
+
+```js
+manifestLoadPolicy: {
+  default: {
+    maxTimeToFirstByteMs: Infinity,
+    maxLoadTimeMs: 20000,
+    timeoutRetry: {
+      maxNumRetry: 2,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+    },
+    errorRetry: {
+      maxNumRetry: 1,
+      retryDelayMs: 1000,
+      maxRetryDelayMs: 8000,
+    },
+  },
+},
+playlistLoadPolicy: {
+  default: {
+    maxTimeToFirstByteMs: 10000,
+    maxLoadTimeMs: 20000,
+    timeoutRetry: {
+      maxNumRetry: 2,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+    },
+    errorRetry: {
+      maxNumRetry: 2,
+      retryDelayMs: 1000,
+      maxRetryDelayMs: 8000,
+    },
+  },
+},
+fragLoadPolicy: {
+  default: {
+    maxTimeToFirstByteMs: 10000,
+    maxLoadTimeMs: 120000,
+    timeoutRetry: {
+      maxNumRetry: 4,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+    },
+    errorRetry: {
+      maxNumRetry: 6,
+      retryDelayMs: 1000,
+      maxRetryDelayMs: 8000,
+    },
+  },
+},
+keyLoadPolicy: {
+  default: {
+    maxTimeToFirstByteMs: 8000,
+    maxLoadTimeMs: 20000,
+    timeoutRetry: {
+      maxNumRetry: 1,
+      retryDelayMs: 1000,
+      maxRetryDelayMs: 20000,
+      backoff: 'linear',
+    },
+    errorRetry: {
+      maxNumRetry: 8,
+      retryDelayMs: 1000,
+      maxRetryDelayMs: 20000,
+      backoff: 'linear',
+    },
+  },
+},
+certLoadPolicy: {
+  default: {
+    maxTimeToFirstByteMs: 8000,
+    maxLoadTimeMs: 20000,
+    timeoutRetry: null,
+    errorRetry: null,
+  },
+},
+steeringManifestLoadPolicy: {
+  default: {
+    maxTimeToFirstByteMs: 10000,
+    maxLoadTimeMs: 20000,
+    timeoutRetry: {
+      maxNumRetry: 2,
+      retryDelayMs: 0,
+      maxRetryDelayMs: 0,
+    },
+    errorRetry: {
+      maxNumRetry: 1,
+      retryDelayMs: 1000,
+      maxRetryDelayMs: 8000,
+    },
+  }
+}
+```
+
+#### `LoaderConfig`
+
+Each `LoaderConfig` has the following properties:
+
+##### `maxTimeToFirstByteMs: number`
+
+Maximum time-to-first-byte in milliseconds. If no bytes or readyState change happens in this time, a network timeout error will be triggered for the asset.
+
+Non-finite values and 0 will be ignored, resulting in only a single `maxLoadTimeMs` timeout timer for the entire request.
+
+##### `maxLoadTimeMs: number`
+
+Maximum time to load the asset in milliseconds. If the request is not completed in time, a network timeout error will be triggered for the asset.
+
+##### `timeoutRetry: RetryConfig | null`
+
+Retry rules for timeout errors. Specifying null results in no retries after a timeout error for the asset type.
+
+##### `errorRetry: RetryConfig | null`
+
+Retry rules for network I/O errors. Specifying null results in no retries after a timeout error for the asset type.
+
+#### `RetryConfig`
+
+Each `RetryConfig` has the following properties:
+
+##### `maxNumRetry: number`
+
+Maximum number of retries. After an error, the request will be retried this many times before other recovery
+measures are taken. For example, after having retried a segment or playlist request this number of times\*, if it continues to error, the player will try switching to another level or fall back to another Pathway to recover playback.
+
+When no valid recovery options are available, the error will escalate to fatal, and the player will stop loading all media and asset types.
+
+\*Requests resulting in a stall may trigger a level switch before all retries are performed.
+
+##### `retryDelayMs: number`
+
+The time to wait before performing a retry in milliseconds. Delays are added to prevent the player from overloading
+servers having trouble responding to requests.
+
+Retry delay = 2^retryCount _ retryDelayMs (exponential) or retryCount _ retryDelayMs (linear)
+
+##### `maxRetryDelayMs: number`
+
+Maximum delay between retries in milliseconds. With each retry, the delay is increased up to `maxRetryDelayMs`.
+
+##### `backoff?: 'exponential' | 'linear'`
+
+Used to determine retry backoff duration: Retry delay = 2^retryCount \* retryDelayMs (exponential).
+
+##### `shouldRetry`
+
+(default: internal shouldRetry function, type: `(retryConfig: RetryConfig | null | undefined, retryCount: number, isTimeout: boolean, httpStatus: number | undefined,retry: boolean) => boolean`)
+
+Override default shouldRetry check
 
 ### `startFragPrefetch`
 
@@ -876,9 +1078,15 @@ var hls = new Hls({
 
 `XMLHttpRequest` customization callback for default XHR based loader.
 
-Parameter should be a function with two arguments `(xhr: XMLHttpRequest, url: string)`.
-If `xhrSetup` is specified, default loader will invoke it before calling `xhr.send()`.
-This allows user to easily modify/setup XHR. See example below.
+`xhrSetup` should be a function with two arguments `(xhr: XMLHttpRequest, url: string)`.
+If `xhrSetup` is specified, the default loader will invoke it before calling `xhr.send()`.
+This allows users to easily modify the `XMLHttpRequest` instance before sending a request.
+Optionally, a Promise can be returned to wait before the request is sent.
+
+Note that `xhr.open()` should be called in `xhrSetup` if the callback modifies the `XMLHttpRequest`
+instance in ways that require it to be opened first. If `xhrSetup` throws,
+the error will be caught, and `xhrSetup` will be called a second time after opening a GET
+request.
 
 ```js
 var config = {
@@ -1160,6 +1368,12 @@ parameter should be a float greater than [abrEwmaFastVoD](#abrewmafastvod)
 
 Default bandwidth estimate in bits/s prior to collecting fragment bandwidth samples.
 
+### `abrEwmaDefaultEstimateMax`
+
+(default: `5000000`)
+
+Limits value of updated bandwidth estimate taken from first variant found in multivariant playlist on start.
+
 ### `abrBandWidthFactor`
 
 (default: `0.95`)
@@ -1403,7 +1617,11 @@ Set to `-1` for automatic level selection.
 
 ### `hls.firstLevel`
 
-- get: First level index (index of first level appearing in Manifest. it is usually defined as start level hint for player).
+- get: First level index (index of the first Variant appearing in the Multivariant Playlist).
+
+### `hls.firstAutoLevel`
+
+- get: Return quality level that will be used to load the first fragment when not overridden by `startLevel`.
 
 ### `hls.startLevel`
 
@@ -1440,6 +1658,8 @@ Default value is set via [`capLevelToPlayerSize`](#capleveltoplayersize) in conf
 
 get: Returns the current bandwidth estimate in bits/s, if available. Otherwise, `NaN` is returned.
 
+set: Reset `EwmaBandWidthEstimator` using the value set as the new default estimate. This will update the value of `config.abrEwmaDefaultEstimate`.
+
 ### `hls.removeLevel(levelIndex, urlId)`
 
 Remove a loaded level from the list of levels, or a url from a level's list of redundant urls.
@@ -1456,13 +1676,13 @@ Static getter: return hls.js dist version number.
 
 ## Network Loading Control API
 
-By default, hls.js will automatically start loading quality level playlists, and fragments after `Hls.Events.MANIFEST_PARSED` event has been triggered (and video element has been attached).
+By default, hls.js will automatically start loading quality level playlists, and fragments after `Hls.Events.MANIFEST_PARSED` event has been triggered.
 
-However if `config.autoStartLoad` is set to `false`, the following method needs to be called to manually start playlist and fragments loading:
+However, if `config.autoStartLoad` is set to `false`, then `hls.startLoad()` needs to be called to manually start playlist and fragments loading.
 
 ### `hls.startLoad(startPosition=-1)`
 
-Start/restart playlist/fragment loading. this is only effective if MANIFEST_PARSED event has been triggered and video element has been attached to hls object.
+Start/restart playlist/fragment loading. this is only effective if MANIFEST_PARSED event has been triggered.
 
 startPosition is the initial position in the playlist.
 If startPosition is not set to -1, it allows to override default startPosition to the one you want (it will bypass hls.config.liveSync\* config params for Live for example, so that user can start playback from whatever position)
@@ -1579,6 +1799,8 @@ Full list of Events is available below:
   - data: { levels : [available quality levels], audioTracks : [available audio tracks], captions? [available closed-captions media], subtitles?: [available subtitle tracks], url : manifestURL, stats : [LoaderStats], sessionData: [parsed #EXT-X-SESSION-DATA], networkDetails: [Loader specific object for debugging (XMLHttpRequest or fetch Response)]}
 - `Hls.Events.MANIFEST_PARSED` - fired after manifest has been parsed
   - data: { levels : [ available quality levels ], firstLevel : index of first quality level appearing in Manifest, audioTracks, subtitleTracks, stats, audio: boolean, video: boolean, altAudio: boolean }
+- `Hls.Events.STEERING_MANIFEST_LOADED` - fired when the Content Steering Manifest is loaded
+  - data: { `url`: steering manifest URL, `steeringManifest`: SteeringManifest object } }
 - `Hls.Events.LEVEL_SWITCHING` - fired when a level switch is requested
   - data: { `level` and Level object properties (please see [below](#level) for more information) }
 - `Hls.Events.LEVEL_SWITCHED` - fired when a level switch is effective
@@ -1720,14 +1942,14 @@ Full list of errors is described below:
   - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT`, fatal : `true`, url : manifest URL, loader : URL loader }
 - `Hls.ErrorDetails.MANIFEST_PARSING_ERROR` - raised when manifest parsing failed to find proper content
   - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.MANIFEST_PARSING_ERROR`, fatal : `true`, url : manifest URL, reason : parsing error reason }
-- `Hls.ErrorDetails.LEVEL_EMPTY_ERROR` - raised when loaded level contains no fragments
-  - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.LEVEL_EMPTY_ERROR`, url: playlist URL, reason: error reason, level: index of the bad level }
+- `Hls.ErrorDetails.LEVEL_EMPTY_ERROR` - raised when loaded level contains no fragments (applies to levels and audio and subtitle tracks)
+  - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.LEVEL_EMPTY_ERROR`, url: playlist URL, reason: error reason, level: index of the bad level or undefined, parent: PlaylistLevelType }
 - `Hls.ErrorDetails.LEVEL_LOAD_ERROR` - raised when level loading fails because of a network error
   - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.LEVEL_LOAD_ERROR`, fatal : `true`, url : level URL, response : { code: error code, text: error text }, loader : URL loader }
 - `Hls.ErrorDetails.LEVEL_LOAD_TIMEOUT` - raised when level loading fails because of a timeout
   - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.LEVEL_LOAD_TIMEOUT`, fatal : `false`, url : level URL, loader : URL loader }
-- `Hls.ErrorDetails.LEVEL_PARSING_ERROR` - raised when level parsing failed or found invalid content
-  - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.LEVEL_PARSING_ERROR`, fatal : `false`, url : level URL, error: Error }
+- `Hls.ErrorDetails.LEVEL_PARSING_ERROR` - raised when playlist parsing failed or found invalid content (applies to levels and audio and subtitle tracks)
+  - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.LEVEL_PARSING_ERROR`, fatal : `false`, url : level URL, error: Error, parent: PlaylistLevelType }
 - `Hls.ErrorDetails.AUDIO_TRACK_LOAD_ERROR` - raised when audio playlist loading fails because of a network error
   - data: { type : `NETWORK_ERROR`, details : `Hls.ErrorDetails.AUDIO_TRACK_LOAD_ERROR`, fatal : `false`, url : audio URL, response : { code: error code, text: error text }, loader : URL loader }
 - `Hls.ErrorDetails.AUDIO_TRACK_LOAD_TIMEOUT` - raised when audio playlist loading fails because of a timeout
@@ -1753,6 +1975,8 @@ Full list of errors is described below:
   - data: { type : `MEDIA_ERROR`, details : `Hls.ErrorDetails.FRAG_DECRYPT_ERROR`, fatal : `true`, reason : failure reason }
 - `Hls.ErrorDetails.FRAG_PARSING_ERROR` - raised when fragment parsing fails
   - data: { type : `MEDIA_ERROR`, details : `Hls.ErrorDetails.FRAG_PARSING_ERROR`, fatal : `true` or `false`, reason : failure reason }
+- `Hls.ErrorDetails.FRAG_GAP` - raised when segment loading is skipped because a fragment with a GAP tag or part with GAP=YES attribute was encountered
+  - data: { type : `MEDIA_ERROR`, details : `Hls.ErrorDetails.FRAG_GAP`, fatal : `false`, frag : fragment object, part? : part object (if any) }
 - `Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR` - raised when MediaSource fails to add new sourceBuffer
   - data: { type : `MEDIA_ERROR`, details : `Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR`, fatal : `false`, error : error raised by MediaSource, mimeType: mimeType on which the failure happened }
 - `Hls.ErrorDetails.BUFFER_INCOMPATIBLE_CODECS_ERROR` - raised when no MediaSource(s) could be created based on track codec(s)
@@ -1824,12 +2048,35 @@ See sample `Level` object below:
 
 ```js
 {
-  url: [ 'http://levelURL.com', 'http://levelURLfailover.com' ],
-  bitrate: 246440,
-  name: "240",
-  codecs: "mp4a.40.5,avc1.42000d",
-  width: 320,
-  height: 136,
+  audioCodec: "mp4a.40.2"
+  audioGroupIds: <string[]> | undefined,
+  bitrate: 3000000,
+  codecSet: "avc1,mp4a",
+  details: <LevelDetails> | undefined
+  fragmentError: 0,
+  frameRate: 30,
+  height: 720,
+  loadError: 0
+  name: "720p",
+  realBitrate: 0,
+  supportedPromise: undefined,
+  supportedResult: {supported: true, configurations: <MediaDecodingConfiguration[]>, decodingInfoResults: <MediaCapabilitiesDecodingInfo[]>}
+  textGroupIds: <string[]> | undefined,
+  unknownCodecs: [],
+  url: [ "http://levelURL.com", "http://levelURLfailover.com" ],
+  videoCodec: "avc1.66.30",
+  width: 1280,
+  attrs: <AttrList>,
+  audioGroupId: undefined,
+  averageBitrate: 2962000,
+  codecs: "avc1.66.30,mp4a.40.2",
+  maxBitrate: 3000000,
+  pathwayId: ".",
+  score: 0,
+  textGroupId: "subs",
+  uri: "http://levelURL.com",
+  urlId: 0,
+  videoRange: "SDR"
 }
 ```
 
@@ -1879,6 +2126,7 @@ See sample object below:
 {
   duration: 10,
   level: 3,
+  cc: 0
   sn: 35,
   start: 30,
   url: 'http://fragURL.com'

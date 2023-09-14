@@ -4,6 +4,7 @@ import type { Fragment } from '../loader/fragment';
 import type { Part } from '../loader/fragment';
 import type { LevelDetails } from '../loader/level-details';
 import type {
+  HdcpLevel,
   HlsUrlParameters,
   Level,
   LevelParsed,
@@ -29,6 +30,7 @@ import type { HlsListeners } from '../events';
 import type { KeyLoaderInfo } from '../loader/key-loader';
 import type { LevelKey } from '../loader/level-key';
 import type { IErrorAction } from '../controller/error-controller';
+import type { SteeringManifest } from '../controller/content-steering-controller';
 
 export interface MediaAttachingData {
   media: HTMLMediaElement;
@@ -36,6 +38,7 @@ export interface MediaAttachingData {
 
 export interface MediaAttachedData {
   media: HTMLMediaElement;
+  mediaSource?: MediaSource;
 }
 
 export interface BufferCodecsData {
@@ -220,6 +223,14 @@ export interface FPSDropLevelCappingData {
   level: number;
 }
 
+export interface MaxAutoLevelUpdatedData {
+  autoLevelCapping: number;
+  levels: Level[] | null;
+  maxAutoLevel: number;
+  minAutoLevel: number;
+  maxHdcpLevel: HdcpLevel;
+}
+
 export interface ErrorData {
   type: ErrorTypes;
   details: ErrorDetails;
@@ -232,6 +243,7 @@ export interface ErrorData {
   context?: PlaylistLoaderContext;
   event?: keyof HlsListeners | 'demuxerWorker';
   frag?: Fragment;
+  part?: Part | null;
   level?: number | undefined;
   levelRetry?: boolean;
   loader?: Loader<LoaderContext>;
@@ -242,6 +254,7 @@ export interface ErrorData {
   response?: LoaderResponse;
   url?: string;
   parent?: PlaylistLevelType;
+  sourceBufferName?: SourceBufferName;
   /**
    * @deprecated Use ErrorData.error
    */
@@ -366,3 +379,8 @@ export interface BackBufferData {
  * @deprecated Use BackBufferData
  */
 export interface LiveBackBufferData extends BackBufferData {}
+
+export interface SteeringManifestLoadedData {
+  steeringManifest: SteeringManifest;
+  url: string;
+}

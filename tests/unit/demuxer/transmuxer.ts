@@ -5,9 +5,9 @@ import { Fragment } from '../../../src/loader/fragment';
 import { PlaylistLevelType } from '../../../src/types/loader';
 import Hls from '../../../src/hls';
 
-import * as sinon from 'sinon';
-import * as chai from 'chai';
-import * as sinonChai from 'sinon-chai';
+import sinon from 'sinon';
+import chai from 'chai';
+import sinonChai from 'sinon-chai';
 import { logger } from '../../../src/utils/logger';
 
 chai.use(sinonChai);
@@ -34,13 +34,14 @@ describe('TransmuxerInterface tests', function () {
       hls,
       id,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     ) as any;
     expect(transmuxerInterface.hls).to.equal(hls, 'Hls object created');
     expect(transmuxerInterface.id).to.equal(id, 'Id has been set up');
     expect(transmuxerInterface.observer.emit, 'emit exists').to.exist;
     expect(transmuxerInterface.observer.off, 'off exists').to.exist;
-    expect(transmuxerInterface.worker, 'worker is null').to.not.exist;
+    expect(transmuxerInterface.workerContext, 'workerContext is null').to.not
+      .exist;
   });
 
   it('can construct with a worker', function () {
@@ -52,13 +53,13 @@ describe('TransmuxerInterface tests', function () {
       hls,
       id,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     ) as any;
     expect(transmuxerInterface.hls).to.equal(hls, 'Hls object created');
     expect(transmuxerInterface.id).to.equal(id, 'Id has been set up');
     expect(transmuxerInterface.observer.emit, 'emit exists').to.exist;
     expect(transmuxerInterface.observer.off, 'off exists').to.exist;
-    expect(transmuxerInterface.worker, 'worker exists').to.exist;
+    expect(transmuxerInterface.workerContext, 'workerContext exists').to.exist;
   });
 
   it('can destroy a transmuxer worker', function () {
@@ -70,13 +71,14 @@ describe('TransmuxerInterface tests', function () {
       hls,
       id,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     );
     const transmuxerInterfacePrivates = transmuxerInterface as any;
     transmuxerInterface.destroy();
     expect(transmuxerInterfacePrivates.observer, 'observer').to.not.exist;
     expect(transmuxerInterfacePrivates.transmuxer, 'transmuxer').to.not.exist;
-    expect(transmuxerInterfacePrivates.worker, 'worker').to.not.exist;
+    expect(transmuxerInterfacePrivates.workerContext, 'workerContext').to.not
+      .exist;
   });
 
   it('can destroy an inline transmuxer', function () {
@@ -88,13 +90,14 @@ describe('TransmuxerInterface tests', function () {
       hls,
       id,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     );
     const transmuxerInterfacePrivates = transmuxerInterface as any;
     transmuxerInterface.destroy();
     expect(transmuxerInterfacePrivates.observer, 'observer').to.not.exist;
     expect(transmuxerInterfacePrivates.transmuxer, 'transmuxer').to.not.exist;
-    expect(transmuxerInterfacePrivates.worker, 'worker').to.not.exist;
+    expect(transmuxerInterfacePrivates.workerContext, 'workerContext').to.not
+      .exist;
   });
 
   it('pushes data to a transmuxer worker', function () {
@@ -106,10 +109,13 @@ describe('TransmuxerInterface tests', function () {
       hls,
       id,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     );
     const transmuxerInterfacePrivates = transmuxerInterface as any;
-    const stub = sinon.stub(transmuxerInterfacePrivates.worker, 'postMessage');
+    const stub = sinon.stub(
+      transmuxerInterfacePrivates.workerContext.worker,
+      'postMessage',
+    );
     const currentFrag = new Fragment(PlaylistLevelType.MAIN, '');
     currentFrag.cc = 100;
     currentFrag.sn = 5;
@@ -135,14 +141,14 @@ describe('TransmuxerInterface tests', function () {
       part,
       duration,
       accurateTimeOffset,
-      chunkMeta
+      chunkMeta,
     );
 
     expect(stub).to.have.been.calledOnce;
     const firstCall = stub.args[0][0];
     expect(
       firstCall,
-      'Demux call 1: ' + JSON.stringify(firstCall, null, 2)
+      'Demux call 1: ' + JSON.stringify(firstCall, null, 2),
     ).to.deep.equal({
       cmd: 'demux',
       data,
@@ -168,14 +174,14 @@ describe('TransmuxerInterface tests', function () {
       part,
       duration,
       accurateTimeOffset,
-      chunkMeta
+      chunkMeta,
     );
 
     expect(stub).to.have.been.calledTwice;
     const secondCall = stub.args[1][0];
     expect(
       secondCall,
-      'Demux call 2: ' + JSON.stringify(secondCall, null, 2)
+      'Demux call 2: ' + JSON.stringify(secondCall, null, 2),
     ).to.deep.equal({
       cmd: 'demux',
       data,
@@ -194,7 +200,7 @@ describe('TransmuxerInterface tests', function () {
       hls,
       id,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     );
     const transmuxerInterfacePrivates = transmuxerInterface as any;
 
@@ -222,7 +228,7 @@ describe('TransmuxerInterface tests', function () {
 
     const configureStub = sinon.stub(
       transmuxerInterfacePrivates.transmuxer,
-      'configure'
+      'configure',
     );
     const pushStub = sinon.stub(transmuxerInterfacePrivates.transmuxer, 'push');
     pushStub.returns(Promise.reject(new Error('Stubbed transmux result')));
@@ -235,7 +241,7 @@ describe('TransmuxerInterface tests', function () {
       part,
       duration,
       accurateTimeOffset,
-      chunkMeta
+      chunkMeta,
     );
 
     const tConfig = new TransmuxConfig('', '', initSegmentData, 0);
@@ -248,7 +254,7 @@ describe('TransmuxerInterface tests', function () {
       data,
       newFrag.decryptdata,
       chunkMeta,
-      state
+      state,
     );
   });
 
@@ -267,7 +273,7 @@ describe('TransmuxerInterface tests', function () {
       hls,
       PlaylistLevelType.MAIN,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     );
     const transmuxerInterfacePrivates = transmuxerInterface as any;
     transmuxerInterfacePrivates.frag = {};
@@ -291,7 +297,7 @@ describe('TransmuxerInterface tests', function () {
       hls,
       PlaylistLevelType.MAIN,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     );
     const transmuxerInterfacePrivates = transmuxerInterface as any;
     const evt = {
@@ -314,7 +320,7 @@ describe('TransmuxerInterface tests', function () {
       hls,
       PlaylistLevelType.MAIN,
       onTransmuxComplete,
-      onFlush
+      onFlush,
     );
     const transmuxerInterfacePrivates = transmuxerInterface as any;
     const evt = {

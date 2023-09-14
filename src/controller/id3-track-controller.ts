@@ -31,6 +31,8 @@ type Cue = VTTCue | TextTrackCue;
 const MIN_CUE_DURATION = 0.25;
 
 function getCueClass() {
+  if (typeof self === 'undefined') return undefined;
+
   // Attempt to recreate Safari functionality by creating
   // WebKitDataCue objects when available and store the decoded
   // ID3 data in the value property of the cue
@@ -59,7 +61,7 @@ function hexToArrayBuffer(str): ArrayBuffer {
       .replace(/^0x/, '')
       .replace(/([\da-fA-F]{2}) ?/g, '0x$1 ')
       .replace(/ +$/, '')
-      .split(' ')
+      .split(' '),
   ).buffer;
 }
 class ID3TrackController implements ComponentAPI {
@@ -108,7 +110,7 @@ class ID3TrackController implements ComponentAPI {
   // Add ID3 metatadata text track.
   protected onMediaAttached(
     event: Events.MEDIA_ATTACHED,
-    data: MediaAttachedData
+    data: MediaAttachedData,
   ): void {
     this.media = data.media;
   }
@@ -152,7 +154,7 @@ class ID3TrackController implements ComponentAPI {
 
   onFragParsingMetadata(
     event: Events.FRAG_PARSING_METADATA,
-    data: FragParsingMetadataData
+    data: FragParsingMetadataData,
   ) {
     if (!this.media) {
       return;
@@ -204,7 +206,7 @@ class ID3TrackController implements ComponentAPI {
           // Safari doesn't put the timestamp frame in the TextTrack
           if (!ID3.isTimeStampFrame(frame)) {
             // add a bounds to any unbounded cues
-            this.updateId3CueEnds(startTime);
+            this.updateId3CueEnds(startTime, type);
 
             const cue = new Cue(startTime, endTime, '');
             cue.value = frame;
@@ -218,12 +220,16 @@ class ID3TrackController implements ComponentAPI {
     }
   }
 
-  updateId3CueEnds(startTime: number) {
+  updateId3CueEnds(startTime: number, type: MetadataSchema) {
     const cues = this.id3Track?.cues;
     if (cues) {
       for (let i = cues.length; i--; ) {
         const cue = cues[i] as any;
-        if (cue.startTime < startTime && cue.endTime === MAX_CUE_ENDTIME) {
+        if (
+          cue.type === type &&
+          cue.startTime < startTime &&
+          cue.endTime === MAX_CUE_ENDTIME
+        ) {
           cue.endTime = startTime;
         }
       }
@@ -232,7 +238,7 @@ class ID3TrackController implements ComponentAPI {
 
   onBufferFlushing(
     event: Events.BUFFER_FLUSHING,
-    { startOffset, endOffset, type }: BufferFlushingData
+    { startOffset, endOffset, type }: BufferFlushingData,
   ) {
     const { id3Track, hls } = this;
     if (!hls) {
@@ -276,7 +282,7 @@ class ID3TrackController implements ComponentAPI {
     // Remove cues from track not found in details.dateRanges
     if (id3Track) {
       const idsToRemove = Object.keys(dateRangeCuesAppended).filter(
-        (id) => !ids.includes(id)
+        (id) => !ids.includes(id),
       );
       for (let i = idsToRemove.length; i--; ) {
         const id = idsToRemove[i];
@@ -308,7 +314,7 @@ class ID3TrackController implements ComponentAPI {
       let durationKnown = appendedDateRangeCues?.durationKnown || false;
       const startTime = dateRangeDateToTimelineSeconds(
         dateRange.startDate,
-        dateTimeOffset
+        dateTimeOffset,
       );
       let endTime = MAX_CUE_ENDTIME;
       const endDate = dateRange.endDate;
@@ -332,7 +338,7 @@ class ID3TrackController implements ComponentAPI {
         if (nextDateRangeWithSameClass) {
           endTime = dateRangeDateToTimelineSeconds(
             nextDateRangeWithSameClass.startDate,
-            dateTimeOffset
+            dateTimeOffset,
           );
           durationKnown = true;
         }

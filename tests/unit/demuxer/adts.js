@@ -9,10 +9,9 @@ import {
   getFrameDuration,
   parseFrameHeader,
   appendFrame,
-} from '../../../src/demux/adts';
+} from '../../../src/demux/audio/adts';
 import { ErrorTypes } from '../../../src/errors';
-
-const sinon = require('sinon');
+import sinon from 'sinon';
 
 describe('getAudioConfig', function () {
   it('should trigger a MEDIA_ERROR event if sample index is invalid', function () {

@@ -1,9 +1,6 @@
 {
   "extends": "./tsconfig-lib.json",
   "compilerOptions": {
-    "sourceMap": true,
-    "target": "ES5",
-    "sourceMap": true,
     "emitDeclarationOnly": false
   },
   "include": ["src/**/*", "tests/unit/**/*", "demo/**/*"]

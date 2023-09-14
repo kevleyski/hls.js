@@ -22,10 +22,10 @@ describe('TimelineController', function () {
         Events.SUBTITLE_TRACKS_UPDATED,
         {
           subtitleTracks: [
-            { id: 0, name: 'en' },
-            { id: 1, name: 'ru' },
+            { id: 0, name: 'en', attrs: { LANGUAGE: 'en', NAME: 'en' } },
+            { id: 1, name: 'ru', attrs: { LANGUAGE: 'ru', NAME: 'ru' } },
           ],
-        }
+        },
       );
 
       // text tracks model contain only newly added manifest tracks, in same order as in manifest
@@ -41,10 +41,10 @@ describe('TimelineController', function () {
         Events.SUBTITLE_TRACKS_UPDATED,
         {
           subtitleTracks: [
-            { id: 0, name: 'en' },
-            { id: 1, name: 'ru' },
+            { id: 0, name: 'en', attrs: { LANGUAGE: 'en', NAME: 'en' } },
+            { id: 1, name: 'ru', attrs: { LANGUAGE: 'ru', NAME: 'ru' } },
           ],
-        }
+        },
       );
 
       // text tracks model contain only newly added manifest tracks, in same order
@@ -62,8 +62,8 @@ describe('TimelineController', function () {
 
       timelineController.onSubtitleTracksUpdated(Events.MANIFEST_LOADED, {
         subtitleTracks: [
-          { id: 0, name: 'en' },
-          { id: 1, name: 'ru' },
+          { id: 0, name: 'en', attrs: { LANGUAGE: 'en', NAME: 'en' } },
+          { id: 1, name: 'ru', attrs: { LANGUAGE: 'ru', NAME: 'ru' } },
         ],
       });
 
@@ -78,8 +78,8 @@ describe('TimelineController', function () {
 
       timelineController.onSubtitleTracksUpdated(Events.MANIFEST_LOADED, {
         subtitleTracks: [
-          { id: 0, name: 'ru' },
-          { id: 1, name: 'en' },
+          { id: 0, name: 'ru', attrs: { LANGUAGE: 'ru', NAME: 'ru' } },
+          { id: 1, name: 'en', attrs: { LANGUAGE: 'en', NAME: 'en' } },
         ],
       });
 
@@ -146,6 +146,7 @@ describe('TimelineController', function () {
           {
             id: 0,
             name: 'en',
+            attrs: {},
           },
         ],
       });

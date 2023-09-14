@@ -1,6 +1,6 @@
-import * as chai from 'chai';
-import * as sinonChai from 'sinon-chai';
 import { parseTimeStamp } from '../../../src/utils/vttparser';
+import chai from 'chai';
+import sinonChai from 'sinon-chai';
 
 chai.use(sinonChai);
 const expect = chai.expect;
@@ -10,7 +10,7 @@ describe('VTTParser', function () {
     function assertTimeStampValue(timestamp, value) {
       expect(parseTimeStamp(timestamp)).to.eq(
         value,
-        `"${timestamp}" should equal ${value}`
+        `"${timestamp}" should equal ${value}`,
       );
     }
     it('should parse fractional seconds correctly regardless of length', function () {

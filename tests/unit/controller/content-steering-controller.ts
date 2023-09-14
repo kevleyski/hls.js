@@ -22,9 +22,10 @@ import type { MediaPlaylist } from '../../../src/types/media-playlist';
 import type { SteeringManifest } from '../../../src/controller/content-steering-controller';
 import type { LoaderResponse } from '../../../src/types/loader';
 
-import * as sinon from 'sinon';
-import * as chai from 'chai';
-import * as sinonChai from 'sinon-chai';
+import sinon from 'sinon';
+import chai from 'chai';
+import sinonChai from 'sinon-chai';
+import { getMediaSource } from '../../../src/utils/mediasource-helper';
 
 chai.use(sinonChai);
 const expect = chai.expect;
@@ -64,12 +65,14 @@ describe('ContentSteeringController', function () {
   let contentSteeringController: ConentSteeringControllerTestable;
 
   beforeEach(function () {
+    const MediaSource = getMediaSource();
     hls = new HlsMock({
       loader: MockXhr,
     });
     contentSteeringController = new ContentSteeringController(
-      hls as any
+      hls as any,
     ) as unknown as ConentSteeringControllerTestable;
+    // @ts-ignore
     sandbox.stub(MediaSource, 'isTypeSupported').returns(true);
   });
 
@@ -101,7 +104,7 @@ describe('ContentSteeringController', function () {
         },
       });
       expect(contentSteeringController.uri).to.equal(
-        'http://example.com/manifest.json'
+        'http://example.com/manifest.json',
       );
       expect(contentSteeringController.pathwayId).to.equal('pathway-2');
     });
@@ -155,7 +158,7 @@ describe('ContentSteeringController', function () {
           {
             url: 'http://example.com/manifest.json?_HLS_pathway=pathway-2&_HLS_throughput=500000',
           },
-          JSON.stringify(contentSteeringController.loader.context)
+          JSON.stringify(contentSteeringController.loader.context),
         );
     });
 
@@ -167,7 +170,7 @@ describe('ContentSteeringController', function () {
         },
       });
       expect(contentSteeringController.uri).to.equal(
-        'http://example.com/manifest.json'
+        'http://example.com/manifest.json',
       );
       expect(contentSteeringController.updated).to.equal(0);
       expect(contentSteeringController.timeToLoad).to.equal(300);
@@ -177,15 +180,15 @@ describe('ContentSteeringController', function () {
           TTL: 100,
           'RELOAD-URI': 'http://beta.example2.com/manifest.json',
         },
-        contentSteeringController
+        contentSteeringController,
       );
       expect(contentSteeringController.uri, 'updates the uri').to.equal(
-        'http://beta.example2.com/manifest.json'
+        'http://beta.example2.com/manifest.json',
       );
       expect(contentSteeringController.updated).to.be.gt(0);
       expect(
         contentSteeringController.timeToLoad,
-        'updates the timeToLoad'
+        'updates the timeToLoad',
       ).to.equal(100);
       expect(contentSteeringController.reloadTimer).to.be.gt(-1);
     });
@@ -201,12 +204,12 @@ describe('ContentSteeringController', function () {
     beforeEach(function () {
       parsedMultivariant = M3U8Parser.parseMasterPlaylist(
         multivariantPlaylistWithPathways,
-        'http://example.com/main.m3u8'
+        'http://example.com/main.m3u8',
       );
       const parsedMediaOptions = M3U8Parser.parseMasterPlaylistMedia(
         multivariantPlaylistWithPathways,
         'http://example.com/main.m3u8',
-        parsedMultivariant
+        parsedMultivariant,
       );
       const manifestLoadedData = {
         contentSteering: parsedMultivariant.contentSteering,
@@ -216,7 +219,7 @@ describe('ContentSteeringController', function () {
       };
       levelController = hls.levelController = new LevelController(
         hls as any,
-        contentSteeringController as any
+        contentSteeringController as any,
       );
       audioTrackController = hls.audioTrackController =
         new AudioTrackController(hls as any);
@@ -225,11 +228,11 @@ describe('ContentSteeringController', function () {
       hls.nextAutoLevel = 0;
       contentSteeringController.onManifestLoaded(
         Events.MANIFEST_LOADED,
-        manifestLoadedData
+        manifestLoadedData,
       );
       levelController.onManifestLoaded(
         Events.MANIFEST_LOADED,
-        manifestLoadedData
+        manifestLoadedData,
       );
       const { payload } = hls.getEventData(0) as {
         name: string;
@@ -251,7 +254,7 @@ describe('ContentSteeringController', function () {
       expect(manifestParsedData.firstLevel).to.equal(0);
       expect(manifestParsedData.levels[0].pathwayId).to.equal('Bar');
       expect(levelController.levels, 'LevelController levels').to.have.lengthOf(
-        10
+        10,
       );
     });
 
@@ -261,25 +264,34 @@ describe('ContentSteeringController', function () {
         {
           'PATHWAY-PRIORITY': ['Baz', 'Foo', 'Bar'],
         },
-        contentSteeringController
+        contentSteeringController,
       );
-      expect(hls.trigger.callCount, 'events triggered').to.equal(6);
+      expect(hls.trigger.callCount, 'events triggered').to.equal(7);
       expect(hls.getEventData(0).name).to.equal(Events.MANIFEST_PARSED);
       const parsedEvent = hls.getEventData(0);
       expect(parsedEvent.payload)
         .to.have.property('audioTracks')
         .that.has.lengthOf(6, 'MANIFEST_PARSED audioTracks');
 
-      expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-      const updatedEvent = hls.getEventData(1);
+      expect(hls.getEventData(1).name).to.equal(
+        Events.STEERING_MANIFEST_LOADED,
+      );
+      const steeringManifestLoadedEvent = hls.getEventData(1);
+      expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+      expect(steeringManifestLoadedEvent.payload).to.have.property(
+        'steeringManifest',
+      );
+
+      expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+      const updatedEvent = hls.getEventData(2);
       const eventData = updatedEvent.payload as LevelsUpdatedData;
       expect(eventData)
         .to.have.property('levels')
         .that.has.lengthOf(10, 'LEVELS_UPDATED levels');
       expect(eventData.levels[0].pathwayId).to.equal('Baz');
 
-      expect(hls.getEventData(2).name).to.equal(Events.LEVEL_SWITCHING);
-      const switchingEvent = hls.getEventData(2);
+      expect(hls.getEventData(3).name).to.equal(Events.LEVEL_SWITCHING);
+      const switchingEvent = hls.getEventData(3);
       expect(switchingEvent.payload).to.nested.include({
         'attrs.PATHWAY-ID': 'Baz',
       });
@@ -289,26 +301,26 @@ describe('ContentSteeringController', function () {
         uri: 'http://www.baz.com/tier6.m3u8',
       });
 
-      expect(hls.getEventData(3).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
-      expect(hls.getEventData(4).name).to.equal(Events.AUDIO_TRACK_SWITCHING);
-      expect(hls.getEventData(5).name).to.equal(Events.SUBTITLE_TRACKS_UPDATED);
+      expect(hls.getEventData(4).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
+      expect(hls.getEventData(5).name).to.equal(Events.AUDIO_TRACK_SWITCHING);
+      expect(hls.getEventData(6).name).to.equal(Events.SUBTITLE_TRACKS_UPDATED);
       expect(levelController.levels, 'LevelController levels').to.have.lengthOf(
-        10
+        10,
       );
       expect(levelController.levels[0].uri).to.equal(
-        'http://www.baz.com/tier6.m3u8'
+        'http://www.baz.com/tier6.m3u8',
       );
       expect(
         contentSteeringController.levels,
-        'Content Steering variants'
+        'Content Steering variants',
       ).to.have.lengthOf(30);
       expect(
         contentSteeringController.audioTracks,
-        'Content Steering audio tracks'
+        'Content Steering audio tracks',
       ).to.have.lengthOf(6);
       expect(
         contentSteeringController.subtitleTracks,
-        'Content Steering subtitle tracks'
+        'Content Steering subtitle tracks',
       ).to.have.lengthOf(6);
     });
 
@@ -316,7 +328,7 @@ describe('ContentSteeringController', function () {
       it('clones the Base Pathway', function () {
         expect(
           contentSteeringController.levels,
-          'Content Steering variants'
+          'Content Steering variants',
         ).to.have.lengthOf(30);
         loadSteeringManifest(
           {
@@ -331,30 +343,40 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
         expect(
           contentSteeringController.levels,
-          'Content Steering variants'
+          'Content Steering variants',
         ).to.have.lengthOf(40);
         expect(
           contentSteeringController.audioTracks,
-          'Content Steering audio tracks'
+          'Content Steering audio tracks',
         ).to.have.lengthOf(8);
         expect(
           contentSteeringController.subtitleTracks,
-          'Content Steering subtitle tracks'
+          'Content Steering subtitle tracks',
         ).to.have.lengthOf(8);
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         const eventData = updatedEvent.payload as LevelsUpdatedData;
         expect(eventData)
           .to.have.property('levels')
           .that.has.lengthOf(10, 'LEVELS_UPDATED levels');
         expect(eventData.levels[0].pathwayId).to.equal('Buzz');
 
-        expect(hls.getEventData(2).name).to.equal(Events.LEVEL_SWITCHING);
-        const switchingEvent = hls.getEventData(2);
+        expect(hls.getEventData(3).name).to.equal(Events.LEVEL_SWITCHING);
+        const switchingEvent = hls.getEventData(3);
         expect(switchingEvent.payload).to.nested.include({
           'attrs.PATHWAY-ID': 'Buzz',
         });
@@ -364,18 +386,18 @@ describe('ContentSteeringController', function () {
           uri: 'http://www.buzz.com/tier6.m3u8',
         });
 
-        expect(hls.getEventData(3).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
-        expect(hls.getEventData(4).name).to.equal(Events.AUDIO_TRACK_SWITCHING);
-        expect(hls.getEventData(5).name).to.equal(
-          Events.SUBTITLE_TRACKS_UPDATED
+        expect(hls.getEventData(4).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
+        expect(hls.getEventData(5).name).to.equal(Events.AUDIO_TRACK_SWITCHING);
+        expect(hls.getEventData(6).name).to.equal(
+          Events.SUBTITLE_TRACKS_UPDATED,
         );
 
         expect(
           levelController.levels,
-          'LevelController levels'
+          'LevelController levels',
         ).to.have.lengthOf(10);
         expect(levelController.levels[0].uri).to.equal(
-          'http://www.buzz.com/tier6.m3u8'
+          'http://www.buzz.com/tier6.m3u8',
         );
       });
 
@@ -384,7 +406,7 @@ describe('ContentSteeringController', function () {
           level.url[0] += '?foo=bar';
         });
         expect(contentSteeringController.levels?.[0].uri).to.equal(
-          'http://www.foo.com/tier6.m3u8?foo=bar'
+          'http://www.foo.com/tier6.m3u8?foo=bar',
         );
         loadSteeringManifest(
           {
@@ -403,17 +425,27 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         const eventData = updatedEvent.payload as LevelsUpdatedData;
         expect(eventData)
           .to.have.property('levels')
           .that.has.lengthOf(10, 'LEVELS_UPDATED levels');
         expect(eventData.levels[0].pathwayId).to.equal('Buzz');
         expect(eventData.levels[0].uri).to.equal(
-          'http://www.foo.com/tier6.m3u8?foo=baz&app=player&beta=test'
+          'http://www.foo.com/tier6.m3u8?foo=baz&app=player&beta=test',
         );
       });
 
@@ -435,10 +467,20 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         expect(updatedEvent.payload)
           .to.have.property('levels')
           .that.has.lengthOf(10, 'LEVELS_UPDATED levels');
@@ -446,19 +488,19 @@ describe('ContentSteeringController', function () {
         expect(eventData.levels[0].pathwayId).to.equal('Buzz');
         expect(eventData.levels[0].attrs['STABLE-VARIANT-ID']).to.equal('foo1');
         expect(eventData.levels[0].uri).to.equal(
-          'http://www.buzz.com/1.m3u8?fallback=true'
+          'http://www.buzz.com/1.m3u8?fallback=true',
         );
         expect(eventData.levels[1].attrs['STABLE-VARIANT-ID']).to.equal('foo2');
         expect(eventData.levels[1].uri).to.equal(
-          'http://www.buzz.com/2.m3u8?fallback=true'
+          'http://www.buzz.com/2.m3u8?fallback=true',
         );
         expect(eventData.levels[2].attrs['STABLE-VARIANT-ID']).to.equal('foo3');
         expect(eventData.levels[2].uri).to.equal(
-          'http://www.buzz.com/3.m3u8?fallback=true'
+          'http://www.buzz.com/3.m3u8?fallback=true',
         );
         expect(eventData.levels[3].attrs['STABLE-VARIANT-ID']).to.equal('foo4');
         expect(eventData.levels[3].uri).to.equal(
-          'http://www.foo.com/tier10.m3u8'
+          'http://www.foo.com/tier10.m3u8',
         );
       });
 
@@ -483,81 +525,81 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
         expect(
           audioTrackController.tracks,
-          'AudioTrackController tracks'
+          'AudioTrackController tracks',
         ).to.have.lengthOf(8);
         expect(audioTrackController.tracks[6].attrs['PATHWAY-ID']).to.equal(
-          'Buzz'
+          'Buzz',
         );
         expect(
-          audioTrackController.tracks[6].attrs['STABLE-RENDITION-ID']
+          audioTrackController.tracks[6].attrs['STABLE-RENDITION-ID'],
         ).to.equal('audio-foo1');
         expect(audioTrackController.tracks[6].groupId).to.equal(
-          'AAC-foo_clone_Buzz'
+          'AAC-foo_clone_Buzz',
         );
         expect(audioTrackController.tracks[6].url).to.equal(
-          'http://z.buzz.com/audio_aac.m3u8?fallback=true'
+          'http://z.buzz.com/audio_aac.m3u8?fallback=true',
         );
         expect(audioTrackController.tracks[7].attrs['PATHWAY-ID']).to.equal(
-          'Buzz'
+          'Buzz',
         );
         expect(
-          audioTrackController.tracks[7].attrs['STABLE-RENDITION-ID']
+          audioTrackController.tracks[7].attrs['STABLE-RENDITION-ID'],
         ).to.equal('audio-foo2');
         expect(audioTrackController.tracks[7].groupId).to.equal(
-          'EC3-foo_clone_Buzz'
+          'EC3-foo_clone_Buzz',
         );
         expect(audioTrackController.tracks[7].url).to.equal(
-          'http://z.buzz.com/audio_ec3.m3u8?fallback=true'
+          'http://z.buzz.com/audio_ec3.m3u8?fallback=true',
         );
 
-        expect(hls.getEventData(3).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
-        const audioTracksEvent = hls.getEventData(3);
+        expect(hls.getEventData(4).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
+        const audioTracksEvent = hls.getEventData(4);
         const eventData = audioTracksEvent.payload as AudioTracksUpdatedData;
         expect(eventData)
           .to.have.property('audioTracks')
           .that.has.lengthOf(1, 'AUDIO_TRACKS_UPDATED audioTracks');
         expect(eventData.audioTracks[0].attrs['PATHWAY-ID']).to.equal('Buzz');
         expect(eventData.audioTracks[0].attrs['STABLE-RENDITION-ID']).to.equal(
-          'audio-foo1'
+          'audio-foo1',
         );
         expect(eventData.audioTracks[0].url).to.equal(
-          'http://z.buzz.com/audio_aac.m3u8?fallback=true'
+          'http://z.buzz.com/audio_aac.m3u8?fallback=true',
         );
 
         expect(
           subtitleTrackController.tracks,
-          'SubtitleTrackController tracks'
+          'SubtitleTrackController tracks',
         ).to.have.lengthOf(8);
-        expect(hls.getEventData(5).name).to.equal(
-          Events.SUBTITLE_TRACKS_UPDATED
+        expect(hls.getEventData(6).name).to.equal(
+          Events.SUBTITLE_TRACKS_UPDATED,
         );
-        const subtitleTracksEvent = hls.getEventData(5);
+        const subtitleTracksEvent = hls.getEventData(6);
         const subsEventData =
           subtitleTracksEvent.payload as SubtitleTracksUpdatedData;
         expect(subsEventData)
           .to.have.property('subtitleTracks')
           .that.has.lengthOf(2, 'SUBTITLE_TRACKS_UPDATED subtitleTracks');
         expect(subsEventData.subtitleTracks[0].attrs['PATHWAY-ID']).to.equal(
-          'Buzz'
+          'Buzz',
         );
         expect(
-          subsEventData.subtitleTracks[0].attrs['STABLE-RENDITION-ID']
+          subsEventData.subtitleTracks[0].attrs['STABLE-RENDITION-ID'],
         ).to.equal('subs-foo1');
         expect(subsEventData.subtitleTracks[0].url).to.equal(
-          'http://z.buzz.com/subs-en.m3u8?fallback=true'
+          'http://z.buzz.com/subs-en.m3u8?fallback=true',
         );
         expect(subsEventData.subtitleTracks[1].attrs['PATHWAY-ID']).to.equal(
-          'Buzz'
+          'Buzz',
         );
         expect(
-          subsEventData.subtitleTracks[1].attrs['STABLE-RENDITION-ID']
+          subsEventData.subtitleTracks[1].attrs['STABLE-RENDITION-ID'],
         ).to.equal('subs-foo2');
         expect(subsEventData.subtitleTracks[1].url).to.equal(
-          'http://z.buzz.com/subs-it.m3u8?fallback=true'
+          'http://z.buzz.com/subs-it.m3u8?fallback=true',
         );
       });
 
@@ -588,45 +630,55 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         expect(updatedEvent.payload)
           .to.have.property('levels')
           .that.has.lengthOf(10, 'LEVELS_UPDATED levels');
         const eventData = updatedEvent.payload as LevelsUpdatedData;
         expect(eventData.levels[0].pathwayId).to.equal('Bear');
         expect(eventData.levels[0].uri).to.equal(
-          'http://www.bear.com/tier6.m3u8?cloned=buzz'
+          'http://www.bear.com/tier6.m3u8?cloned=buzz',
         );
         expect(eventData.levels[1].attrs['STABLE-VARIANT-ID']).to.equal('foo2');
         expect(eventData.levels[1].uri).to.equal(
-          'http://www.bear.com/2.m3u8?fallback=true&cloned=buzz'
+          'http://www.bear.com/2.m3u8?fallback=true&cloned=buzz',
         );
 
-        expect(hls.getEventData(3).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
-        const audioTracksEvent = hls.getEventData(3);
+        expect(hls.getEventData(4).name).to.equal(Events.AUDIO_TRACKS_UPDATED);
+        const audioTracksEvent = hls.getEventData(4);
         const audioEventData =
           audioTracksEvent.payload as AudioTracksUpdatedData;
         expect(audioEventData.audioTracks[0].attrs['PATHWAY-ID']).to.equal(
-          'Bear'
+          'Bear',
         );
         expect(audioEventData.audioTracks[0].url).to.equal(
-          'http://www.bear.com/audio_aac.m3u8?cloned=buzz'
+          'http://www.bear.com/audio_aac.m3u8?cloned=buzz',
         );
 
-        expect(hls.getEventData(5).name).to.equal(
-          Events.SUBTITLE_TRACKS_UPDATED
+        expect(hls.getEventData(6).name).to.equal(
+          Events.SUBTITLE_TRACKS_UPDATED,
         );
-        const subtitleTracksEvent = hls.getEventData(5);
+        const subtitleTracksEvent = hls.getEventData(6);
         const subsEventData =
           subtitleTracksEvent.payload as SubtitleTracksUpdatedData;
         expect(subsEventData.subtitleTracks[0].attrs['PATHWAY-ID']).to.equal(
-          'Bear'
+          'Bear',
         );
         expect(subsEventData.subtitleTracks[0].url).to.equal(
-          'http://www.bear.com/subs-en.m3u8?cloned=buzz'
+          'http://www.bear.com/subs-en.m3u8?cloned=buzz',
         );
       });
 
@@ -644,14 +696,24 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         const eventData = updatedEvent.payload as LevelsUpdatedData;
         expect(eventData.levels[0].pathwayId).to.equal('Buzz');
         expect(eventData.levels[0].uri).to.equal(
-          'http://www.foo.com/tier6.m3u8'
+          'http://www.foo.com/tier6.m3u8',
         );
       });
 
@@ -672,14 +734,24 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         const eventData = updatedEvent.payload as LevelsUpdatedData;
         expect(eventData.levels[0].pathwayId).to.equal('Buzz');
         expect(eventData.levels[0].uri).to.equal(
-          'http://www.foo.com/tier6.m3u8?not-empty=ok'
+          'http://www.foo.com/tier6.m3u8?not-empty=ok',
         );
       });
 
@@ -697,18 +769,28 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
         expect(
           contentSteeringController.levels,
-          'Content Steering variants'
+          'Content Steering variants',
         ).to.have.lengthOf(30);
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         const eventData = updatedEvent.payload as LevelsUpdatedData;
         expect(eventData.levels[0].pathwayId).to.equal('Foo');
         expect(eventData.levels[0].uri).to.equal(
-          'http://www.foo.com/tier6.m3u8'
+          'http://www.foo.com/tier6.m3u8',
         );
       });
 
@@ -740,7 +822,7 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
         loadSteeringManifest(
           {
@@ -755,18 +837,28 @@ describe('ContentSteeringController', function () {
               },
             ],
           },
-          contentSteeringController
+          contentSteeringController,
         );
         expect(
           contentSteeringController.levels,
-          'Content Steering variants'
+          'Content Steering variants',
         ).to.have.lengthOf(40);
-        expect(hls.getEventData(1).name).to.equal(Events.LEVELS_UPDATED);
-        const updatedEvent = hls.getEventData(1);
+
+        expect(hls.getEventData(1).name).to.equal(
+          Events.STEERING_MANIFEST_LOADED,
+        );
+        const steeringManifestLoadedEvent = hls.getEventData(1);
+        expect(steeringManifestLoadedEvent.payload).to.have.property('url');
+        expect(steeringManifestLoadedEvent.payload).to.have.property(
+          'steeringManifest',
+        );
+
+        expect(hls.getEventData(2).name).to.equal(Events.LEVELS_UPDATED);
+        const updatedEvent = hls.getEventData(2);
         const eventData = updatedEvent.payload as LevelsUpdatedData;
         expect(eventData.levels[0].pathwayId).to.equal('Buzz');
         expect(eventData.levels[0].uri).to.equal(
-          'http://www.buzz-1.com/tier6.m3u8'
+          'http://www.buzz-1.com/tier6.m3u8',
         );
       });
     });
@@ -775,7 +867,7 @@ describe('ContentSteeringController', function () {
 
 function loadSteeringManifest(
   partialManifest: Partial<SteeringManifest>,
-  steering: ConentSteeringControllerTestable
+  steering: ConentSteeringControllerTestable,
 ) {
   steering.startLoad();
   const response: LoaderResponse = {
@@ -790,6 +882,6 @@ function loadSteeringManifest(
     response,
     new LoadStats(),
     steering.loader.context as any,
-    null
+    null,
   );
 }

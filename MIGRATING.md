@@ -1,3 +1,11 @@
+# Migrating from hls.js 1.x to 1.4+
+
+The 1.4 version of hls.js now ships with an ESM version of the library (`dist/hls.mjs`) which requires that you specify the [`workerPath` config option](https://github.com/video-dev/hls.js/blob/master/docs/API.md#workerpath) in order for web workers to be used. This should point to the `dist/hls.worker.js` file included in the package.
+
+If you are using the UMD version (`dist/hls.js`), no changes are required.
+
+**Important Note:** If you are using a bundler, such as webpack, the ESM version of the package will likely be used by default. If this is the case, make sure to add the `workerPath` config option after upgrading to hls.js 1.4 or above.
+
 # Migrating from hls.js 0.x to 1.x
 
 This guide provides an overview to migrating an application using hls.js from v0.14.x to v1.0.0.
@@ -17,6 +25,13 @@ the back buffer on VOD content will be cleared by hls.js rather than leaving it 
 Set `backBufferLength` to `Infinity` and `liveBackBufferLength` to `90` if you would like 1.0 to handle back buffer
 eviction for Live and VOD streams as older versions did. While `liveBackBufferLength` can still be used, it has been
 marked deprecated and may be removed in an upcoming minor release.
+
+### Front Buffer Eviction
+
+The new `frontBufferFlushThreshold` setting defaults to Infinity seconds and governs active eviction of buffered ranges outside of
+the current contiguous front buffer. For example, given currentTime=0 and bufferedRanges=[[0, 100], [150, 200]] with
+a configured frontBufferFlushThreshold=60, we will only remove the range from [150, 200] as it lies outside of the target buffer length
+and is not contiguous with the forward buffer from the currentTime of 0.
 
 ### Low Latency Streams
 
