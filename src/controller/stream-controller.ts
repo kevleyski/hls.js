@@ -576,9 +576,13 @@ export default class StreamController
     this.hls.trigger(Events.BUFFER_RESET, undefined);
     this.fragmentTracker.removeAllFragments();
     this.couldBacktrack = false;
-    this.startPosition = this.lastCurrentTime = 0;
-    this.levels = this.fragPlaying = this.backtrackFragment = null;
-    this.altAudio = this.audioOnly = false;
+    this.startPosition = this.lastCurrentTime = this.fragLastKbps = 0;
+    this.levels =
+      this.fragPlaying =
+      this.backtrackFragment =
+      this.levelLastLoaded =
+        null;
+    this.altAudio = this.audioOnly = this.startFragRequested = false;
   }
 
   private onManifestParsed(
@@ -652,11 +656,7 @@ export default class StreamController
       (this.state === State.FRAG_LOADING ||
         this.state === State.FRAG_LOADING_WAITING_RETRY)
     ) {
-      if (
-        (fragCurrent.level !== data.level ||
-          fragCurrent.urlId !== curLevel.urlId) &&
-        fragCurrent.loader
-      ) {
+      if (fragCurrent.level !== data.level && fragCurrent.loader) {
         this.abortCurrentFrag();
       }
     }
@@ -1391,8 +1391,7 @@ export default class StreamController
         if (
           !fragPlaying ||
           fragPlayingCurrent.sn !== fragPlaying.sn ||
-          fragPlaying.level !== fragCurrentLevel ||
-          fragPlayingCurrent.urlId !== fragPlaying.urlId
+          fragPlaying.level !== fragCurrentLevel
         ) {
           this.fragPlaying = fragPlayingCurrent;
           this.hls.trigger(Events.FRAG_CHANGED, { frag: fragPlayingCurrent });

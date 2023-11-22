@@ -470,8 +470,8 @@ export default class Hls implements HlsEventEmitter {
     }
   }
 
-  removeLevel(levelIndex, urlId = 0) {
-    this.levelController.removeLevel(levelIndex, urlId);
+  removeLevel(levelIndex: number) {
+    this.levelController.removeLevel(levelIndex);
   }
 
   /**
@@ -494,8 +494,7 @@ export default class Hls implements HlsEventEmitter {
    */
   set currentLevel(newLevel: number) {
     logger.log(`set currentLevel:${newLevel}`);
-    this.loadLevel = newLevel;
-    this.abrController.clearTimer();
+    this.levelController.manualLevel = newLevel;
     this.streamController.immediateLevelSwitch();
   }
 
@@ -721,7 +720,7 @@ export default class Hls implements HlsEventEmitter {
     const { levels, autoLevelCapping, maxHdcpLevel } = this;
 
     let maxAutoLevel;
-    if (autoLevelCapping === -1 && levels && levels.length) {
+    if (autoLevelCapping === -1 && levels?.length) {
       maxAutoLevel = levels.length - 1;
     } else {
       maxAutoLevel = autoLevelCapping;

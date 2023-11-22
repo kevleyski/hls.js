@@ -111,7 +111,6 @@ class AbrController implements AbrComponentAPI {
     this.lastLoadedFragLevel = -1;
     this.lastLevelLoadSec = 0;
     this.fragCurrent = this.partCurrent = null;
-    this.audioTracksByGroup = null;
     this.onLevelsUpdated();
     this.clearTimer();
   }
@@ -123,6 +122,7 @@ class AbrController implements AbrComponentAPI {
     this._nextAutoLevel = -1;
     this.nextAutoLevelKey = '';
     this.codecTiers = null;
+    this.audioTracksByGroup = null;
   }
 
   protected onFragLoading(event: Events.FRAG_LOADING, data: FragLoadingData) {
@@ -504,8 +504,8 @@ class AbrController implements AbrComponentAPI {
     const currentFragDuration = partCurrent
       ? partCurrent.duration
       : fragCurrent
-      ? fragCurrent.duration
-      : 0;
+        ? fragCurrent.duration
+        : 0;
 
     // playbackRate is the absolute value of the playback rate; if media.playbackRate is 0, we use 1 to load as
     // if we're playing back at the normal rate.
@@ -647,8 +647,8 @@ class AbrController implements AbrComponentAPI {
     const currentFragDuration = partCurrent
       ? partCurrent.duration
       : fragCurrent
-      ? fragCurrent.duration
-      : 0;
+        ? fragCurrent.duration
+        : 0;
 
     const ttfbEstimateSec = this.bwEstimator.getEstimateTTFB() / 1000;
     const levelsSkipped: number[] = [];

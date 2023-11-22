@@ -46,6 +46,7 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`maxLiveSyncPlaybackRate`](#maxlivesyncplaybackrate)
   - [`liveDurationInfinity`](#livedurationinfinity)
   - [`liveBackBufferLength` (deprecated)](#livebackbufferlength-deprecated)
+  - [`preferManagedMediaSource`](#prefermanagedmediasource)
   - [`enableWorker`](#enableworker)
   - [`workerPath`](#workerpath)
   - [`enableSoftwareAES`](#enablesoftwareaes)
@@ -375,6 +376,7 @@ var config = {
   liveSyncDurationCount: 3,
   liveMaxLatencyDurationCount: Infinity,
   liveDurationInfinity: false,
+  preferManagedMediaSource: false,
   enableWorker: true,
   enableSoftwareAES: true,
   manifestLoadingTimeOut: 10000,
@@ -518,7 +520,7 @@ This is the guaranteed buffer length hls.js will try to reach, regardless of max
 
 (default: `Infinity`)
 
-The maximum duration of buffered media to keep once it has been played, in seconds. Any video buffered past this duration will be evicted. `Infinity` means no restriction on back buffer length; `0` keeps the minimum amount. The minimum amount is equal to the target duration of a segment to ensure that current playback is not interrupted.
+The maximum duration of buffered media to keep once it has been played, in seconds. Any video buffered past this duration will be evicted. `Infinity` means no restriction on back buffer length; `0` keeps the minimum amount. The minimum amount is equal to the target duration of a segment to ensure that current playback is not interrupted. Keep in mind, the browser can and does evict media from the buffer on its own, so with the `Infinity` setting, hls.js will let the browser do what it needs to do. (Ref: the MSE spec under [coded frame eviction](https://www.w3.org/TR/media-source-2/#sourcebuffer-coded-frame-eviction)).
 
 ### `frontBufferFlushThreshold`
 
@@ -671,6 +673,12 @@ If you want to have a native Live UI in environments like iOS Safari, Safari, An
 ### `liveBackBufferLength` (deprecated)
 
 `liveBackBufferLength` has been deprecated. Use `backBufferLength` instead.
+
+### `preferManagedMediaSource`
+
+(default `true`)
+
+HLS.js uses the Managed Media Source API (`ManagedMediaSource` global) instead of the `MediaSource` global by default when present. Setting this to `false` will only use `ManagedMediaSource` when `MediaSource` is undefined.
 
 ### `enableWorker`
 

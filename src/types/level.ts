@@ -1,3 +1,4 @@
+import type { MediaPlaylist } from './media-playlist';
 import type { LevelDetails } from '../loader/level-details';
 import type { AttrList } from '../utils/attr-list';
 import type { MediaDecodingInfo } from '../utils/mediacapabilities-helper';
@@ -9,7 +10,6 @@ export interface LevelParsed {
   details?: LevelDetails;
   height?: number;
   id?: number;
-  level?: number;
   name: string;
   textCodec?: string;
   unknownCodecs?: string[];
@@ -102,27 +102,27 @@ export class Level {
   public readonly audioCodec: string | undefined;
   public readonly bitrate: number;
   public readonly codecSet: string;
+  public readonly url: string[];
   public readonly frameRate: number;
   public readonly height: number;
   public readonly id: number;
   public readonly name: string | undefined;
   public readonly videoCodec: string | undefined;
   public readonly width: number;
-  public readonly unknownCodecs: string[] | undefined;
-  public audioGroupIds?: (string | undefined)[];
   public details?: LevelDetails;
   public fragmentError: number = 0;
   public loadError: number = 0;
   public loaded?: { bytes: number; duration: number };
   public realBitrate: number = 0;
-  public textGroupIds?: (string | undefined)[];
-  public url: string[];
   public supportedPromise?: Promise<MediaDecodingInfo>;
   public supportedResult?: MediaDecodingInfo;
-  private _urlId: number = 0;
   private _avgBitrate: number = 0;
+  private _audioGroups?: (string | undefined)[];
+  private _subtitleGroups?: (string | undefined)[];
+  // Deprecated (retained for backwards compatibility)
+  private readonly _urlId: number = 0;
 
-  constructor(data: LevelParsed) {
+  constructor(data: LevelParsed | MediaPlaylist) {
     this.url = [data.url];
     this._attrs = [data.attrs];
     this.bitrate = data.bitrate;
@@ -137,11 +137,12 @@ export class Level {
     this._avgBitrate = this.attrs.decimalInteger('AVERAGE-BANDWIDTH');
     this.audioCodec = data.audioCodec;
     this.videoCodec = data.videoCodec;
-    this.unknownCodecs = data.unknownCodecs;
     this.codecSet = [data.videoCodec, data.audioCodec]
       .filter((c) => !!c)
       .map((s: string) => s.substring(0, 4))
       .join(',');
+    this.addGroupId('audio', data.attrs.AUDIO);
+    this.addGroupId('text', data.attrs.SUBTITLES);
   }
 
   get maxBitrate(): number {
@@ -153,7 +154,7 @@ export class Level {
   }
 
   get attrs(): LevelAttributes {
-    return this._attrs[this._urlId];
+    return this._attrs[0];
   }
 
   get codecs(): string {
@@ -173,54 +174,80 @@ export class Level {
   }
 
   get uri(): string {
-    return this.url[this._urlId] || '';
+    return this.url[0] || '';
   }
 
-  get urlId(): number {
-    return this._urlId;
+  hasAudioGroup(groupId: string | undefined): boolean {
+    return hasGroup(this._audioGroups, groupId);
   }
 
-  set urlId(value: number) {
-    const newValue = value % this.url.length;
-    if (this._urlId !== newValue) {
-      this.fragmentError = 0;
-      this.loadError = 0;
-      this.details = undefined;
-      this._urlId = newValue;
+  hasSubtitleGroup(groupId: string | undefined): boolean {
+    return hasGroup(this._subtitleGroups, groupId);
+  }
+
+  get audioGroups(): (string | undefined)[] | undefined {
+    return this._audioGroups;
+  }
+
+  get subtitleGroups(): (string | undefined)[] | undefined {
+    return this._subtitleGroups;
+  }
+
+  addGroupId(type: string, groupId: string | undefined) {
+    if (!groupId) {
+      return;
     }
+    if (type === 'audio') {
+      let audioGroups = this._audioGroups;
+      if (!audioGroups) {
+        audioGroups = this._audioGroups = [];
+      }
+      if (audioGroups.indexOf(groupId) === -1) {
+        audioGroups.push(groupId);
+      }
+    } else if (type === 'text') {
+      let subtitleGroups = this._subtitleGroups;
+      if (!subtitleGroups) {
+        subtitleGroups = this._subtitleGroups = [];
+      }
+      if (subtitleGroups.indexOf(groupId) === -1) {
+        subtitleGroups.push(groupId);
+      }
+    }
+  }
+
+  // Deprecated methods (retained for backwards compatibility)
+  get urlId(): number {
+    return 0;
+  }
+
+  set urlId(value: number) {}
+
+  get audioGroupIds(): (string | undefined)[] | undefined {
+    return this.audioGroups ? [this.audioGroupId] : undefined;
+  }
+
+  get textGroupIds(): (string | undefined)[] | undefined {
+    return this.subtitleGroups ? [this.textGroupId] : undefined;
   }
 
   get audioGroupId(): string | undefined {
-    return this.audioGroupIds?.[this.urlId];
+    return this.audioGroups?.[0];
   }
 
   get textGroupId(): string | undefined {
-    return this.textGroupIds?.[this.urlId];
+    return this.subtitleGroups?.[0];
   }
 
-  addFallback(data: LevelParsed) {
-    this.url.push(data.url);
-    this._attrs.push(data.attrs);
-  }
+  addFallback() {}
 }
 
-export function addGroupId(
-  level: Level,
-  type: string,
-  id: string | undefined,
-): void {
-  if (!id) {
-    return;
+function hasGroup(
+  groups: (string | undefined)[] | undefined,
+  groupId: string | undefined,
+): boolean {
+  if (!groupId || !groups) {
+    return false;
   }
-  if (type === 'audio') {
-    if (!level.audioGroupIds) {
-      level.audioGroupIds = [];
-    }
-    level.audioGroupIds[level.url.length - 1] = id;
-  } else if (type === 'text') {
-    if (!level.textGroupIds) {
-      level.textGroupIds = [];
-    }
-    level.textGroupIds[level.url.length - 1] = id;
-  }
+  return groups.indexOf(groupId) !== -1;
 }

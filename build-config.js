@@ -29,7 +29,7 @@ const buildTypeToOutputName = {
   light: `hls.light`,
 };
 
-/* Allow to customise builds through env-vars */
+/* Allow to customize builds through env-vars */
 // eslint-disable-next-line no-undef
 const env = process.env;
 
@@ -61,7 +61,7 @@ const buildConstants = (type, additional = {}) => ({
     __USE_EME_DRM__: JSON.stringify(type === BUILD_TYPE.full || addEMESupport),
     __USE_CMCD__: JSON.stringify(type === BUILD_TYPE.full || addCMCDSupport),
     __USE_CONTENT_STEERING__: JSON.stringify(
-      type === BUILD_TYPE.full || addContentSteeringSupport,
+      type === BUILD_TYPE.full || BUILD_TYPE.light || addContentSteeringSupport,
     ),
     __USE_VARIABLE_SUBSTITUTION__: JSON.stringify(
       type === BUILD_TYPE.full || addVariableSubstitutionSupport,
@@ -96,7 +96,7 @@ const babelTsWithPresetEnvTargets = ({ targets, stripConsole }) =>
   babel({
     extensions,
     babelHelpers: 'bundled',
-    exclude: 'node_modules/**',
+    exclude: /node_modules\/(?!(@svta)\/).*/,
     assumptions: {
       noDocumentAll: true,
       noClassCalls: true,
@@ -248,12 +248,13 @@ const buildRollupConfig = ({
   includeCoverage,
   sourcemap = true,
   outputFile = null,
+  input = './src/exports-default.ts',
 }) => {
   const outputName = buildTypeToOutputName[type];
   const extension = format === FORMAT.esm ? 'mjs' : 'js';
 
   return {
-    input: './src/hls.ts',
+    input,
     onwarn: (e) => {
       if (allowCircularDeps && e.code === 'CIRCULAR_DEPENDENCY') return;
 
@@ -265,8 +266,8 @@ const buildRollupConfig = ({
       file: outputFile
         ? outputFile
         : minified
-        ? `./dist/${outputName}.min.${extension}`
-        : `./dist/${outputName}.${extension}`,
+          ? `./dist/${outputName}.min.${extension}`
+          : `./dist/${outputName}.${extension}`,
       format,
       banner: shouldBundleWorker(format) ? workerFnBanner : null,
       footer: shouldBundleWorker(format) ? workerFnFooter : null,
@@ -307,6 +308,7 @@ const configs = Object.entries({
     minified: true,
   }),
   fullEsm: buildRollupConfig({
+    input: './src/exports-named.ts',
     type: BUILD_TYPE.full,
     format: FORMAT.esm,
     minified: false,
@@ -322,6 +324,7 @@ const configs = Object.entries({
     minified: true,
   }),
   lightEsm: buildRollupConfig({
+    input: './src/exports-named.ts',
     type: BUILD_TYPE.light,
     format: FORMAT.esm,
     minified: false,

@@ -16,7 +16,6 @@ import { isCodecType } from '../utils/codecs';
 import type { CodecType } from '../utils/codecs';
 import type {
   MediaPlaylist,
-  AudioGroup,
   MediaPlaylistType,
   MediaAttributes,
 } from '../types/media-playlist';
@@ -75,27 +74,21 @@ const LEVEL_PLAYLIST_REGEX_SLOW = new RegExp(
 
 export default class M3U8Parser {
   static findGroup(
-    groups: Array<AudioGroup>,
+    groups: (
+      | { id?: string; audioCodec?: string }
+      | { id?: string; textCodec?: string }
+    )[],
     mediaGroupId: string,
-  ): AudioGroup | undefined {
+  ):
+    | { id?: string; audioCodec?: string }
+    | { id?: string; textCodec?: string }
+    | undefined {
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];
       if (group.id === mediaGroupId) {
         return group;
       }
     }
-  }
-
-  static convertAVC1ToAVCOTI(codec) {
-    // Convert avc1 codec string from RFC-4281 to RFC-6381 for MediaSource.isTypeSupported
-    const avcdata = codec.split('.');
-    if (avcdata.length > 2) {
-      let result = avcdata.shift() + '.';
-      result += parseInt(avcdata.shift()).toString(16);
-      result += ('000' + parseInt(avcdata.shift()).toString(16)).slice(-4);
-      return result;
-    }
-    return codec;
   }
 
   static resolve(url, baseUrl) {
@@ -168,10 +161,6 @@ export default class M3U8Parser {
           ((attrs.CODECS as string) || '').split(/[ ,]+/).filter((c) => c),
           level,
         );
-
-        if (level.videoCodec && level.videoCodec.indexOf('avc1') !== -1) {
-          level.videoCodec = M3U8Parser.convertAVC1ToAVCOTI(level.videoCodec);
-        }
 
         if (!level.unknownCodecs?.length) {
           levelsWithKnownCodecs.push(level);
@@ -317,20 +306,32 @@ export default class M3U8Parser {
             'CHANNELS',
           ]);
         }
+        const lang = attrs.LANGUAGE;
+        const channels = attrs.CHANNELS;
+        const characteristics = attrs.CHARACTERISTICS;
+        const instreamId = attrs['INSTREAM-ID'];
         const media: MediaPlaylist = {
           attrs,
           bitrate: 0,
           id: id++,
           groupId: attrs['GROUP-ID'] || '',
-          instreamId: attrs['INSTREAM-ID'],
-          name: attrs.NAME || attrs.LANGUAGE || '',
+          name: attrs.NAME || lang || '',
           type,
           default: attrs.bool('DEFAULT'),
           autoselect: attrs.bool('AUTOSELECT'),
           forced: attrs.bool('FORCED'),
-          lang: attrs.LANGUAGE,
+          lang: lang,
           url: attrs.URI ? M3U8Parser.resolve(attrs.URI, baseurl) : '',
         };
+        if (channels) {
+          media.channels = channels;
+        }
+        if (characteristics) {
+          media.characteristics = characteristics;
+        }
+        if (instreamId) {
+          media.instreamId = instreamId;
+        }
 
         if (groups?.length) {
           // If there are audio or text groups signalled in the manifest, let's look for a matching codec string for this track
@@ -371,6 +372,7 @@ export default class M3U8Parser {
     let levelkeys: { [key: string]: LevelKey } | undefined;
     let firstPdtIndex = -1;
     let createNextFrag = false;
+    let nextByteRange: string | null = null;
 
     LEVEL_PLAYLIST_REGEX_FAST.lastIndex = 0;
     level.m3u8 = string;
@@ -391,6 +393,10 @@ export default class M3U8Parser {
           frag.initSegment = currentInitSegment;
           frag.rawProgramDateTime = currentInitSegment.rawProgramDateTime;
           currentInitSegment.rawProgramDateTime = null;
+          if (nextByteRange) {
+            frag.setByteRange(nextByteRange);
+            nextByteRange = null;
+          }
         }
       }
 
@@ -412,7 +418,6 @@ export default class M3U8Parser {
           frag.sn = currentSN;
           frag.level = id;
           frag.cc = discontinuityCounter;
-          frag.urlId = levelUrlId;
           fragments.push(frag);
           // avoid sliced strings    https://github.com/video-dev/hls.js/issues/939
           const uri = (' ' + result[3]).slice(1);
@@ -621,6 +626,14 @@ export default class M3U8Parser {
               }
             } else {
               // Initial segment tag is before segment duration tag
+              // Handle case where EXT-X-MAP is declared after EXT-X-BYTERANGE
+              const end = frag.byteRangeEndOffset;
+              if (end) {
+                const start = frag.byteRangeStartOffset as number;
+                nextByteRange = `${end - start}@${start}`;
+              } else {
+                nextByteRange = null;
+              }
               setInitSegment(frag, mapAttrs, id, levelkeys);
               currentInitSegment = frag;
               createNextFrag = true;
