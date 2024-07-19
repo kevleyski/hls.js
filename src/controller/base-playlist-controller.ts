@@ -1,11 +1,16 @@
 import type Hls from '../hls';
 import type { NetworkComponentAPI } from '../types/component-api';
-import { getSkipValue, HlsSkip, HlsUrlParameters, Level } from '../types/level';
+import {
+  getSkipValue,
+  HlsSkip,
+  HlsUrlParameters,
+  type Level,
+} from '../types/level';
 import { computeReloadInterval, mergeDetails } from '../utils/level-helper';
-import { ErrorData } from '../types/events';
+import type { ErrorData } from '../types/events';
 import { getRetryDelay, isTimeoutError } from '../utils/error-helper';
 import { NetworkErrorAction } from './error-controller';
-import { logger } from '../utils/logger';
+import { Logger } from '../utils/logger';
 import type { LevelDetails } from '../loader/level-details';
 import type { MediaPlaylist } from '../types/media-playlist';
 import type {
@@ -14,17 +19,17 @@ import type {
   TrackLoadedData,
 } from '../types/events';
 
-export default class BasePlaylistController implements NetworkComponentAPI {
+export default class BasePlaylistController
+  extends Logger
+  implements NetworkComponentAPI
+{
   protected hls: Hls;
   protected timer: number = -1;
   protected requestScheduled: number = -1;
   protected canLoad: boolean = false;
-  protected log: (msg: any) => void;
-  protected warn: (msg: any) => void;
 
   constructor(hls: Hls, logPrefix: string) {
-    this.log = logger.log.bind(logger, `${logPrefix}:`);
-    this.warn = logger.warn.bind(logger, `${logPrefix}:`);
+    super(logPrefix, hls.logger);
     this.hls = hls;
   }
 
@@ -55,6 +60,7 @@ export default class BasePlaylistController implements NetworkComponentAPI {
   protected switchParams(
     playlistUri: string,
     previous: LevelDetails | undefined,
+    current: LevelDetails | undefined,
   ): HlsUrlParameters | undefined {
     const renditionReports = previous?.renditionReports;
     if (renditionReports) {
@@ -65,7 +71,7 @@ export default class BasePlaylistController implements NetworkComponentAPI {
         try {
           uri = new self.URL(attr.URI, previous.url).href;
         } catch (error) {
-          logger.warn(
+          this.warn(
             `Could not construct new URL for Rendition Report: ${error}`,
           );
           uri = attr.URI || '';
@@ -92,11 +98,8 @@ export default class BasePlaylistController implements NetworkComponentAPI {
             part += 1;
           }
         }
-        return new HlsUrlParameters(
-          msn,
-          part >= 0 ? part : undefined,
-          HlsSkip.No,
-        );
+        const skip = current && getSkipValue(current);
+        return new HlsUrlParameters(msn, part >= 0 ? part : undefined, skip);
       }
     }
   }
@@ -192,7 +195,19 @@ export default class BasePlaylistController implements NetworkComponentAPI {
           details.targetduration * 1.5,
         );
         if (currentGoal > 0) {
-          if (previousDetails && currentGoal > previousDetails.tuneInGoal) {
+          if (cdnAge > details.targetduration * 3) {
+            // Omit segment and part directives when the last response was more than 3 target durations ago,
+            this.log(
+              `Playlist last advanced ${lastAdvanced.toFixed(
+                2,
+              )}s ago. Omitting segment and part directives.`,
+            );
+            msn = undefined;
+            part = undefined;
+          } else if (
+            previousDetails?.tuneInGoal &&
+            cdnAge - details.partTarget > previousDetails.tuneInGoal
+          ) {
             // If we attempted to get the next or latest playlist update, but currentGoal increased,
             // then we either can't catchup, or the "age" header cannot be trusted.
             this.warn(
@@ -298,7 +313,7 @@ export default class BasePlaylistController implements NetworkComponentAPI {
     msn?: number,
     part?: number,
   ): HlsUrlParameters {
-    let skip = getSkipValue(details, msn);
+    let skip = getSkipValue(details);
     if (previousDeliveryDirectives?.skip && details.deltaUpdateFailed) {
       msn = previousDeliveryDirectives.msn;
       part = previousDeliveryDirectives.part;

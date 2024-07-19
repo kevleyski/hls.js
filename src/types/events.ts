@@ -1,7 +1,4 @@
-// eslint-disable-next-line import/no-duplicates
-import type { Fragment } from '../loader/fragment';
-// eslint-disable-next-line import/no-duplicates
-import type { Part } from '../loader/fragment';
+import type { Fragment, MediaFragment, Part } from '../loader/fragment';
 import type { LevelDetails } from '../loader/level-details';
 import type {
   HdcpLevel,
@@ -40,6 +37,10 @@ export interface MediaAttachingData {
 export interface MediaAttachedData {
   media: HTMLMediaElement;
   mediaSource?: MediaSource;
+}
+
+export interface MediaEndedData {
+  stalled: boolean;
 }
 
 export interface BufferCodecsData {
@@ -191,6 +192,18 @@ export interface LevelUpdatedData {
   level: number;
 }
 
+export interface AudioTrackUpdatedData {
+  details: LevelDetails;
+  id: number;
+  groupId: string;
+}
+
+export interface SubtitleTrackUpdatedData {
+  details: LevelDetails;
+  id: number;
+  groupId: string;
+}
+
 export interface LevelPTSUpdatedData {
   details: LevelDetails;
   level: Level;
@@ -316,8 +329,8 @@ export interface NonNativeTextTracksData {
 }
 
 export interface InitPTSFoundData {
-  id: string;
-  frag: Fragment;
+  id: PlaylistLevelType;
+  frag: MediaFragment;
   initPTS: number;
   timescale: number;
 }

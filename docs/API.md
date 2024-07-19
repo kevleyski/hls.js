@@ -40,6 +40,7 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`maxFragLookUpTolerance`](#maxfraglookuptolerance)
   - [`maxMaxBufferLength`](#maxmaxbufferlength)
   - [`liveSyncDurationCount`](#livesyncdurationcount)
+  - [`liveSyncOnStallIncrease`](#livesynconstallincrease)
   - [`liveMaxLatencyDurationCount`](#livemaxlatencydurationcount)
   - [`liveSyncDuration`](#livesyncduration)
   - [`liveMaxLatencyDuration`](#livemaxlatencyduration)
@@ -79,6 +80,9 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`pLoader`](#ploader)
   - [`xhrSetup`](#xhrsetup)
   - [`fetchSetup`](#fetchsetup)
+  - [`videoPreference`](#videopreference)
+  - [`audioPreference`](#audiopreference)
+  - [`subtitlePreference`](#subtitlepreference)
   - [`abrController`](#abrcontroller)
   - [`bufferController`](#buffercontroller)
   - [`capLevelController`](#caplevelcontroller)
@@ -139,16 +143,21 @@ See [API Reference](https://hlsjs-dev.video-dev.org/api-docs/) for a complete li
   - [`hls.maxHdcpLevel`](#hlsmaxhdcplevel)
   - [`hls.capLevelToPlayerSize`](#hlscapleveltoplayersize)
   - [`hls.bandwidthEstimate`](#hlsbandwidthestimate)
-  - [`hls.removeLevel(levelIndex, urlId)`](#hlsremovelevellevelindex-urlid)
+  - [`hls.removeLevel(levelIndex)`](#hlsremovelevellevelindex)
 - [Version Control](#version-control)
   - [`Hls.version`](#hlsversion)
 - [Network Loading Control API](#network-loading-control-api)
   - [`hls.startLoad(startPosition=-1)`](#hlsstartloadstartposition-1)
   - [`hls.stopLoad()`](#hlsstopload)
+  - [`hls.url`](#hlsurl)
 - [Audio Tracks Control API](#audio-tracks-control-api)
+  - [`hls.setAudioOption(audioOption)`](#hlssetaudiooptionaudiooption)
+  - [`hls.allAudioTracks`](#hlsallaudiotracks)
   - [`hls.audioTracks`](#hlsaudiotracks)
   - [`hls.audioTrack`](#hlsaudiotrack)
 - [Subtitle Tracks Control API](#subtitle-tracks-control-api)
+  - [`hls.setSubtitleOption(subtitleOption)`](#hlssetsubtitleoptionsubtitleoption)
+  - [`hls.allSubtitleTracks`](#hlsallsubtitletracks)
   - [`hls.subtitleTracks`](#hlssubtitletracks)
   - [`hls.subtitleTrack`](#hlssubtitletrack)
   - [`hls.subtitleDisplay`](#hlssubtitledisplay)
@@ -184,15 +193,26 @@ First include `https://cdn.jsdelivr.net/npm/hls.js@1` (or `/hls.js` for unminifi
 <script src="//cdn.jsdelivr.net/npm/hls.js@1"></script>
 ```
 
-Invoke the following static method: `Hls.isSupported()` to check whether your browser is supporting [MediaSource Extensions](http://w3c.github.io/media-source/).
+Invoke the following static method: `Hls.isSupported()` to check whether your browser supports [MediaSource Extensions](http://w3c.github.io/media-source/) with any baseline codecs.
 
 ```html
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 <script>
   if (Hls.isSupported()) {
-    console.log('hello hls.js!');
+    console.log('Hello HLS.js!');
   }
 </script>
+```
+
+If you want to test for MSE support without testing for baseline codecs, use `isMSESupported`:
+
+```js
+if (
+  Hls.isMSESupported() &&
+  Hls.getMediaSource().isTypeSupported('video/mp4;codecs="av01.0.01M.08"')
+) {
+  console.log('Hello AV1 playback! AVC who?');
+}
 ```
 
 ### Second step: instantiate Hls object and bind it to `<video>` element
@@ -374,24 +394,36 @@ var config = {
   nudgeMaxRetry: 3,
   maxFragLookUpTolerance: 0.25,
   liveSyncDurationCount: 3,
+  liveSyncOnStallIncrease: 1,
   liveMaxLatencyDurationCount: Infinity,
   liveDurationInfinity: false,
   preferManagedMediaSource: false,
   enableWorker: true,
   enableSoftwareAES: true,
-  manifestLoadingTimeOut: 10000,
-  manifestLoadingMaxRetry: 1,
-  manifestLoadingRetryDelay: 1000,
-  manifestLoadingMaxRetryTimeout: 64000,
+  fragLoadPolicy: {
+    default: {
+      maxTimeToFirstByteMs: 9000,
+      maxLoadTimeMs: 100000,
+      timeoutRetry: {
+        maxNumRetry: 2,
+        retryDelayMs: 0,
+        maxRetryDelayMs: 0,
+      },
+      errorRetry: {
+        maxNumRetry: 5,
+        retryDelayMs: 3000,
+        maxRetryDelayMs: 15000,
+        backoff: 'linear',
+      },
+    },
+  },
   startLevel: undefined,
-  levelLoadingTimeOut: 10000,
-  levelLoadingMaxRetry: 4,
-  levelLoadingRetryDelay: 1000,
-  levelLoadingMaxRetryTimeout: 64000,
-  fragLoadingTimeOut: 20000,
-  fragLoadingMaxRetry: 6,
-  fragLoadingRetryDelay: 1000,
-  fragLoadingMaxRetryTimeout: 64000,
+  audioPreference: {
+    characteristics: 'public.accessibility.describes-video',
+  },
+  subtitlePreference: {
+    lang: 'en-US',
+  },
   startFragPrefetch: false,
   testBandwidth: true,
   progressive: false,
@@ -435,7 +467,11 @@ var config = {
   drmSystems: {},
   drmSystemOptions: {},
   requestMediaKeySystemAccessFunc: requestMediaKeySystemAccess,
-  cmcd: undefined,
+  cmcd: {
+    sessionId: uuid(),
+    contentId: hash(contentURL),
+    useHeaders: false,
+  },
 };
 
 var hls = new Hls(config);
@@ -452,6 +488,8 @@ This configuration will be applied by default to all instances.
 
 - if set to true, the adaptive algorithm with limit levels usable in auto-quality by the HTML video element dimensions (width and height).
   If dimensions between multiple levels are equal, the cap is chosen as the level with the greatest bandwidth.
+  In some devices, the video element dimensions will be multiplied by the device pixel ratio.
+  Use `ignoreDevicePixelRatio` for a strict level limitation based on the size of the video element.
 - if set to false, levels will not be limited. All available levels could be used in auto-quality mode taking only bandwidth into consideration.
 
 ### `capLevelOnFPSDrop`
@@ -627,6 +665,17 @@ edge of live delay, expressed in multiple of `EXT-X-TARGETDURATION`.
 if set to 3, playback will start from fragment N-3, N being the last fragment of the live playlist.
 decreasing this value is likely to cause playback stalls.
 
+### `liveSyncOnStallIncrease`
+
+(default: `1`)
+
+increment to the calculated `hls.targetLatency` on each playback stall, expressed in seconds.
+When `liveSyncDuration` is specified in config,
+`hls.targetLatency` is calculated as `liveSyncDuration` plus `liveSyncOnStallIncrease` multiplied by number of stalls.
+Otherwise `hls.targetLatency` is calculated as `liveSyncDurationCount` multiplied by `EXT-X-TARGETDURATION`
+plus `liveSyncOnStallIncrease` multiplied by number of stalls.
+Decreasing this value will mean that each stall will have less affect on `hls.targetLatency`.
+
 ### `liveMaxLatencyDurationCount`
 
 (default: `Infinity`)
@@ -704,7 +753,7 @@ Enable to use JavaScript version AES decryption for fallback of WebCrypto API.
 
 (default: `undefined`)
 
-When set, use this level as the default hls.startLevel. Keep in mind that the startLevel set with the API takes precedence over config.startLevel configuration parameter.
+When set, use this level as the default `hls.startLevel`. Keep in mind that the `startLevel` set with the API takes precedence over config.startLevel configuration parameter. `startLevel` should be set to value between 0 and the maximum index of `hls.levels`.
 
 ### `fragLoadingTimeOut` / `manifestLoadingTimeOut` / `levelLoadingTimeOut` (deprecated)
 
@@ -1123,6 +1172,34 @@ var config = {
   },
 };
 ```
+
+### `videoPreference`
+
+(default `undefined`)
+
+These settings determine whether HDR video should be selected before SDR video. Which VIDEO-RANGE values are allowed, and in what order of priority can also be specified.
+
+Format `{ preferHDR: boolean, allowedVideoRanges: ('SDR' | 'PQ' | 'HLG')[] }`
+
+- Allow all video ranges if `allowedVideoRanges` is unspecified.
+- If `preferHDR` is defined, use the value to filter `allowedVideoRanges`.
+- Else check window for HDR support and set `preferHDR` to the result.
+
+When `preferHDR` is set, skip checking if the window supports HDR and instead use the value provided to determine level selection preference via dynamic range. A value of `preferHDR === true` will attempt to use HDR levels before selecting from SDR levels.
+
+`allowedVideoRanges` can restrict playback to a limited set of VIDEO-RANGE transfer functions and set their priority for selection. For example, to ignore all HDR variants, set `allowedVideoRanges` to `['SDR']`. Or, to ignore all HLG variants, set `allowedVideoRanges` to `['SDR', 'PQ']`. To prioritize PQ variants over HLG, set `allowedVideoRanges` to `['SDR', 'HLG', 'PQ']`.
+
+### `audioPreference`
+
+(default: `undefined`)
+
+Set a preference used to find and select the best matching audio track on start. The selection can influence starting level selection based on the audio group(s) available to match the preference. `audioPreference` accepts a value of an audio track object (MediaPlaylist), AudioSelectionOption (track fields to match), or undefined. If not set or set to a value of `undefined`, HLS.js will auto select a default track on start.
+
+### `subtitlePreference`
+
+(default: `undefined`)
+
+Set a preference used to find and select the best matching subtitle track on start. `subtitlePreference` accepts a value of a subtitle track object (MediaPlaylist), SubtitleSelectionOption (track fields to match), or undefined. If not set or set to a value of `undefined`, HLS.js will not enable subtitles unless there is a default or forced option.
 
 ### `abrController`
 
@@ -1564,6 +1641,7 @@ data will be passed on all media requests (manifests, playlists, a/v segments, t
 - `sessionId`: The CMCD session id. One will be automatically generated if none is provided.
 - `contentId`: The CMCD content id.
 - `useHeaders`: Send CMCD data in request headers instead of as query args. Defaults to `false`.
+- `includeKeys`: An optional array of CMCD keys. When present, only these CMCD fields will be included with each each request.
 
 ## Video Binding/Unbinding API
 
@@ -1668,9 +1746,9 @@ get: Returns the current bandwidth estimate in bits/s, if available. Otherwise, 
 
 set: Reset `EwmaBandWidthEstimator` using the value set as the new default estimate. This will update the value of `config.abrEwmaDefaultEstimate`.
 
-### `hls.removeLevel(levelIndex, urlId)`
+### `hls.removeLevel(levelIndex)`
 
-Remove a loaded level from the list of levels, or a url from a level's list of redundant urls.
+Remove a level from the list of loaded levels.
 This can be used to remove a rendition or playlist url that errors frequently from the list of levels that a user
 or hls.js can choose from.
 
@@ -1699,25 +1777,45 @@ If startPosition is not set to -1, it allows to override default startPosition t
 
 stop playlist/fragment loading. could be resumed later on by calling `hls.startLoad()`
 
+### `hls.url`
+
+get : string of current HLS asset passed to `hls.loadSource()`, otherwise null
+
 ## Audio Tracks Control API
+
+### `hls.setAudioOption(audioOption)`
+
+Find and select the best matching audio track, making a level switch when a Group change is necessary. Updates `hls.config.audioPreference`. Returns the selected track or null when no matching track is found.
+
+### `hls.allAudioTracks`
+
+get : array of all supported audio tracks found in the Multivariant Playlist
 
 ### `hls.audioTracks`
 
-get : array of audio tracks exposed in manifest
+get : array of supported audio tracks in the active audio group ID
 
 ### `hls.audioTrack`
 
-get/set : audio track id (returned by)
+get/set : index of selected audio track in `hls.audioTracks`
 
 ## Subtitle Tracks Control API
 
+### `hls.setSubtitleOption(subtitleOption)`
+
+Find and select the best matching subtitle track, making a level switch when a Group change is necessary. Updates `hls.config.subtitlePreference`. Returns the selected track or null when no matching track is found.
+
+### `hls.allSubtitleTracks`
+
+get : array of all subtitle tracks found in the Multivariant Playlist
+
 ### `hls.subtitleTracks`
 
-get : array of subtitle tracks exposed in manifest
+get : array of subtitle tracks in the active subtitle group ID
 
 ### `hls.subtitleTrack`
 
-get/set : subtitle track id (returned by). Returns -1 if no track is visible. Set to -1 to disable all subtitle tracks.
+get/set : index of selected subtitle track in `hls.subtitleTracks`. Returns -1 if no track is visible. Set to -1 to disable all subtitle tracks.
 
 ### `hls.subtitleDisplay`
 
@@ -1746,7 +1844,17 @@ returns 0 before first playlist is loaded
 
 ### `hls.targetLatency`
 
-get : target distance from the edge as calculated by the latency controller
+get/set : target distance from the edge as calculated by the latency controller
+
+When `liveSyncDuration` is specified in config,
+`targetLatency` is calculated as `liveSyncDuration` plus `liveSyncOnStallIncrease` multiplied by number of stalls.
+Otherwise `targetLatency` is calculated as `liveSyncDurationCount` multiplied by `EXT-X-TARGETDURATION`
+plus `liveSyncOnStallIncrease` multiplied by number of stalls.
+
+Setting `targetLatency` resets number of stalls to `0` and sets `liveSyncDuration` to the new value.
+Note: if the initial config specified `liveSyncDurationCount` rather than `liveSyncDuration`,
+setting `targetLatency` will assign a new value to `liveSyncDuration`. This value will be used to calculate
+`targetLatency` from now on and `liveSyncDurationCount` will be ignored.
 
 ### `hls.drift`
 

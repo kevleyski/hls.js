@@ -1,5 +1,5 @@
 import { ErrorTypes, ErrorDetails } from '../errors';
-import {
+import type {
   LoaderStats,
   LoaderResponse,
   LoaderConfiguration,
@@ -194,6 +194,8 @@ export default class KeyLoader implements ComponentAPI {
         }
         return this.loadKeyEME(keyInfo, frag);
       case 'AES-128':
+      case 'AES-256':
+      case 'AES-256-CTR':
         return this.loadKeyHTTP(keyInfo, frag);
       default:
         return Promise.reject(

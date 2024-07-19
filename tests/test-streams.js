@@ -262,4 +262,21 @@ module.exports = {
        NAL units are not starting right at the beginning of the PES packet when using hardware accelerated decoding.`,
     abr: false,
   },
+  aes256: {
+    url: 'https://jvaryhlstests.blob.core.windows.net/hlstestdata/playlist_encrypted.m3u8',
+    description: 'aes-256 and aes-256-ctr full segment encryption',
+    abr: false,
+  },
+  mpegTsHevcHls: {
+    url: 'https://devoldemar.github.io/streams/hls/bipbop/hevc.m3u8',
+    description: 'Advanced stream (HEVC Main 10, MPEG-TS segments)',
+    skipFunctionalTests: true,
+  },
+  mpegTsBitmovinHevc: {
+    url: 'https://bitmovin-a.akamaihd.net/content/dataset/multi-codec/hevc/v720p_ts.m3u8',
+    description:
+      'HLS M2TS by Bitmovin (HEVC Main, many NALUs overflowing PESes, video only)',
+    abr: false,
+    skipFunctionalTests: true,
+  },
 };

@@ -1,13 +1,21 @@
 import { Events } from '../events';
-import { logger } from '../utils/logger';
+import { Logger } from '../utils/logger';
 import { ErrorDetails, ErrorTypes } from '../errors';
 import { BufferHelper } from '../utils/buffer-helper';
 import {
   getCodecCompatibleName,
   pickMostCompleteCodecName,
 } from '../utils/codecs';
-import { getMediaSource } from '../utils/mediasource-helper';
-import { ElementaryStreamTypes } from '../loader/fragment';
+import {
+  getMediaSource,
+  isManagedMediaSource,
+} from '../utils/mediasource-helper';
+import {
+  ElementaryStreamTypes,
+  type Part,
+  type Fragment,
+} from '../loader/fragment';
+import { PlaylistLevelType } from '../types/loader';
 import type { TrackSet } from '../types/track';
 import BufferOperationQueue from './buffer-operation-queue';
 import {
@@ -31,6 +39,7 @@ import type {
 import type { ComponentAPI } from '../types/component-api';
 import type { ChunkMetadata } from '../types/transmuxer';
 import type Hls from '../hls';
+import type { FragmentTracker } from './fragment-tracker';
 import type { LevelDetails } from '../loader/level-details';
 import type { HlsConfig } from '../config';
 
@@ -42,7 +51,7 @@ interface BufferedChangeEvent extends Event {
   readonly removedRanges?: TimeRanges;
 }
 
-export default class BufferController implements ComponentAPI {
+export default class BufferController extends Logger implements ComponentAPI {
   // The level details used to determine duration, target-duration and live
   private details: LevelDetails | null = null;
   // cache the self generated object url to detect hijack of video tag
@@ -53,6 +62,7 @@ export default class BufferController implements ComponentAPI {
   private listeners!: SourceBufferListeners;
 
   private hls: Hls;
+  private fragmentTracker: FragmentTracker;
 
   // The number of BUFFER_CODEC events received before any sourceBuffers are created
   public bufferCodecEventsExpected: number = 0;
@@ -69,6 +79,14 @@ export default class BufferController implements ComponentAPI {
   // Last MP3 audio chunk appended
   private lastMpegAudioChunk: ChunkMetadata | null = null;
 
+  // Audio fragment blocked from appending until corresponding video appends or context changes
+  private blockedAudioAppend: {
+    op: BufferOperation;
+    frag: Fragment | Part;
+  } | null = null;
+  // Keep track of video append position for unblocking audio
+  private lastVideoAppendEnd: number = 0;
+
   private appendSource: boolean;
 
   // counters
@@ -82,17 +100,14 @@ export default class BufferController implements ComponentAPI {
   public pendingTracks: TrackSet = {};
   public sourceBuffer!: SourceBuffers;
 
-  protected log: (msg: any) => void;
-  protected warn: (msg: any, obj?: any) => void;
-  protected error: (msg: any, obj?: any) => void;
-
-  constructor(hls: Hls) {
+  constructor(hls: Hls, fragmentTracker: FragmentTracker) {
+    super('buffer-controller', hls.logger);
     this.hls = hls;
-    const logPrefix = '[buffer-controller]';
-    this.appendSource = hls.config.preferManagedMediaSource;
-    this.log = logger.log.bind(logger, logPrefix);
-    this.warn = logger.warn.bind(logger, logPrefix);
-    this.error = logger.error.bind(logger, logPrefix);
+    this.fragmentTracker = fragmentTracker;
+    this.appendSource = isManagedMediaSource(
+      getMediaSource(hls.config.preferManagedMediaSource),
+    );
+
     this._initSourceBuffer();
     this.registerListeners();
   }
@@ -108,6 +123,14 @@ export default class BufferController implements ComponentAPI {
     this.unregisterListeners();
     this.details = null;
     this.lastMpegAudioChunk = null;
+    // @ts-ignore
+    this.hls = this.fragmentTracker = null;
+    // @ts-ignore
+    this._onMediaSourceOpen = this._onMediaSourceClose = null;
+    // @ts-ignore
+    this._onMediaSourceEnded = null;
+    // @ts-ignore
+    this._onStartStreaming = this._onEndStreaming = null;
   }
 
   protected registerListeners() {
@@ -124,6 +147,7 @@ export default class BufferController implements ComponentAPI {
     hls.on(Events.LEVEL_UPDATED, this.onLevelUpdated, this);
     hls.on(Events.FRAG_PARSED, this.onFragParsed, this);
     hls.on(Events.FRAG_CHANGED, this.onFragChanged, this);
+    hls.on(Events.ERROR, this.onError, this);
   }
 
   protected unregisterListeners() {
@@ -140,6 +164,7 @@ export default class BufferController implements ComponentAPI {
     hls.off(Events.LEVEL_UPDATED, this.onLevelUpdated, this);
     hls.off(Events.FRAG_PARSED, this.onFragParsed, this);
     hls.off(Events.FRAG_CHANGED, this.onFragChanged, this);
+    hls.off(Events.ERROR, this.onError, this);
   }
 
   private _initSourceBuffer() {
@@ -150,12 +175,10 @@ export default class BufferController implements ComponentAPI {
       video: [],
       audiovideo: [],
     };
-    this.appendErrors = {
-      audio: 0,
-      video: 0,
-      audiovideo: 0,
-    };
+    this.resetAppendErrors();
     this.lastMpegAudioChunk = null;
+    this.blockedAudioAppend = null;
+    this.lastVideoAppendEnd = 0;
   }
 
   private onManifestLoading() {
@@ -185,6 +208,7 @@ export default class BufferController implements ComponentAPI {
   ) {
     const media = (this.media = data.media);
     const MediaSource = getMediaSource(this.appendSource);
+
     if (media && MediaSource) {
       const ms = (this.mediaSource = new MediaSource());
       this.log(`created media source: ${ms.constructor?.name}`);
@@ -192,8 +216,10 @@ export default class BufferController implements ComponentAPI {
       ms.addEventListener('sourceopen', this._onMediaSourceOpen);
       ms.addEventListener('sourceended', this._onMediaSourceEnded);
       ms.addEventListener('sourceclose', this._onMediaSourceClose);
-      ms.addEventListener('startstreaming', this._onStartStreaming);
-      ms.addEventListener('endstreaming', this._onEndStreaming);
+      if (this.appendSource) {
+        ms.addEventListener('startstreaming', this._onStartStreaming);
+        ms.addEventListener('endstreaming', this._onEndStreaming);
+      }
 
       // cache the locally generated object url
       const objectUrl = (this._objectUrl = self.URL.createObjectURL(ms));
@@ -252,39 +278,45 @@ export default class BufferController implements ComponentAPI {
       mediaSource.removeEventListener('sourceopen', this._onMediaSourceOpen);
       mediaSource.removeEventListener('sourceended', this._onMediaSourceEnded);
       mediaSource.removeEventListener('sourceclose', this._onMediaSourceClose);
-      mediaSource.removeEventListener('startstreaming', this._onStartStreaming);
-      mediaSource.removeEventListener('endstreaming', this._onEndStreaming);
-
-      // Detach properly the MediaSource from the HTMLMediaElement as
-      // suggested in https://github.com/w3c/media-source/issues/53.
-      if (media) {
-        media.removeEventListener('emptied', this._onMediaEmptied);
-        if (_objectUrl) {
-          self.URL.revokeObjectURL(_objectUrl);
-        }
-
-        // clean up video tag src only if it's our own url. some external libraries might
-        // hijack the video tag and change its 'src' without destroying the Hls instance first
-        if (this.mediaSrc === _objectUrl) {
-          media.removeAttribute('src');
-          if (this.appendSource) {
-            removeSourceChildren(media);
-          }
-          media.load();
-        } else {
-          this.warn(
-            'media|source.src was changed by a third party - skip cleanup',
-          );
-        }
+      if (this.appendSource) {
+        mediaSource.removeEventListener(
+          'startstreaming',
+          this._onStartStreaming,
+        );
+        mediaSource.removeEventListener('endstreaming', this._onEndStreaming);
       }
 
       this.mediaSource = null;
-      this.media = null;
       this._objectUrl = null;
-      this.bufferCodecEventsExpected = this._bufferCodecEventsTotal;
-      this.pendingTracks = {};
-      this.tracks = {};
     }
+
+    // Detach properly the MediaSource from the HTMLMediaElement as
+    // suggested in https://github.com/w3c/media-source/issues/53.
+    if (media) {
+      media.removeEventListener('emptied', this._onMediaEmptied);
+      if (_objectUrl) {
+        self.URL.revokeObjectURL(_objectUrl);
+      }
+
+      // clean up video tag src only if it's our own url. some external libraries might
+      // hijack the video tag and change its 'src' without destroying the Hls instance first
+      if (this.mediaSrc === _objectUrl) {
+        media.removeAttribute('src');
+        if (this.appendSource) {
+          removeSourceChildren(media);
+        }
+        media.load();
+      } else {
+        this.warn(
+          'media|source.src was changed by a third party - skip cleanup',
+        );
+      }
+      this.media = null;
+    }
+
+    this.bufferCodecEventsExpected = this._bufferCodecEventsTotal;
+    this.pendingTracks = {};
+    this.tracks = {};
 
     this.hls.trigger(Events.MEDIA_DETACHED, undefined);
   }
@@ -294,6 +326,7 @@ export default class BufferController implements ComponentAPI {
       this.resetBuffer(type);
     });
     this._initSourceBuffer();
+    this.hls.resumeBuffering();
   }
 
   private resetBuffer(type: SourceBufferName) {
@@ -319,11 +352,11 @@ export default class BufferController implements ComponentAPI {
   ) {
     const sourceBufferCount = this.getSourceBufferTypes().length;
     const trackNames = Object.keys(data);
-    trackNames.forEach((trackName) => {
+    trackNames.forEach((trackName: SourceBufferName) => {
       if (sourceBufferCount) {
         // check if SourceBuffer codec needs to change
         const track = this.tracks[trackName];
-        if (track && typeof track.buffer.changeType === 'function') {
+        if (track && typeof track.buffer?.changeType === 'function') {
           const { id, codec, levelCodec, container, metadata } =
             data[trackName];
           const currentCodecFull = pickMostCompleteCodecName(
@@ -343,7 +376,7 @@ export default class BufferController implements ComponentAPI {
             if (trackName.slice(0, 5) === 'audio') {
               trackCodec = getCodecCompatibleName(
                 trackCodec,
-                this.hls.config.preferManagedMediaSource,
+                this.appendSource,
               );
             }
             const mimeType = `${container};codecs=${trackCodec}`;
@@ -387,7 +420,7 @@ export default class BufferController implements ComponentAPI {
     }
   }
 
-  protected appendChangeType(type, mimeType) {
+  protected appendChangeType(type: SourceBufferName, mimeType: string) {
     const { operationQueue } = this;
     const operation: BufferOperation = {
       execute: () => {
@@ -400,22 +433,60 @@ export default class BufferController implements ComponentAPI {
       },
       onStart: () => {},
       onComplete: () => {},
-      onError: (e) => {
-        this.warn(`Failed to change ${type} SourceBuffer type`, e);
+      onError: (error: Error) => {
+        this.warn(`Failed to change ${type} SourceBuffer type`, error);
       },
     };
 
     operationQueue.append(operation, type, !!this.pendingTracks[type]);
   }
 
+  private blockAudio(partOrFrag: Fragment | Part) {
+    const pStart = partOrFrag.start;
+    const pTime = pStart + partOrFrag.duration * 0.05;
+    const atGap =
+      this.fragmentTracker.getAppendedFrag(pStart, PlaylistLevelType.MAIN)
+        ?.gap === true;
+    if (atGap) {
+      return;
+    }
+    const op: BufferOperation = {
+      execute: () => {
+        if (
+          this.lastVideoAppendEnd > pTime ||
+          (this.sourceBuffer.video &&
+            BufferHelper.isBuffered(this.sourceBuffer.video, pTime)) ||
+          this.fragmentTracker.getAppendedFrag(pTime, PlaylistLevelType.MAIN)
+            ?.gap === true
+        ) {
+          this.blockedAudioAppend = null;
+          this.operationQueue.shiftAndExecuteNext('audio');
+        }
+      },
+      onStart: () => {},
+      onComplete: () => {},
+      onError: () => {},
+    };
+    this.blockedAudioAppend = { op, frag: partOrFrag };
+    this.operationQueue.append(op, 'audio', true);
+  }
+
+  private unblockAudio() {
+    const blockedAudioAppend = this.blockedAudioAppend;
+    if (blockedAudioAppend) {
+      this.blockedAudioAppend = null;
+      this.operationQueue.unblockAudio(blockedAudioAppend.op);
+    }
+  }
+
   protected onBufferAppending(
     event: Events.BUFFER_APPENDING,
     eventData: BufferAppendingData,
   ) {
-    const { hls, operationQueue, tracks } = this;
-    const { data, type, frag, part, chunkMeta } = eventData;
+    const { operationQueue, tracks } = this;
+    const { data, type, parent, frag, part, chunkMeta } = eventData;
     const chunkStats = chunkMeta.buffering[type];
-
+    const sn = frag.sn;
     const bufferAppendingStart = self.performance.now();
     chunkStats.start = bufferAppendingStart;
     const fragBuffering = frag.stats.buffering;
@@ -442,7 +513,44 @@ export default class BufferController implements ComponentAPI {
       this.lastMpegAudioChunk = chunkMeta;
     }
 
-    const fragStart = frag.start;
+    // Block audio append until overlapping video append
+    const videoSb = this.sourceBuffer.video;
+    if (videoSb && sn !== 'initSegment') {
+      const partOrFrag = part || frag;
+      const blockedAudioAppend = this.blockedAudioAppend;
+      if (type === 'audio' && parent !== 'main' && !this.blockedAudioAppend) {
+        const pStart = partOrFrag.start;
+        const pTime = pStart + partOrFrag.duration * 0.05;
+        const vbuffered = videoSb.buffered;
+        const vappending = this.operationQueue.current('video');
+        if (!vbuffered.length && !vappending) {
+          // wait for video before appending audio
+          this.blockAudio(partOrFrag);
+        } else if (
+          !vappending &&
+          !BufferHelper.isBuffered(videoSb, pTime) &&
+          this.lastVideoAppendEnd < pTime
+        ) {
+          // audio is ahead of video
+          this.blockAudio(partOrFrag);
+        }
+      } else if (type === 'video') {
+        const videoAppendEnd = partOrFrag.end;
+        if (blockedAudioAppend) {
+          const audioStart = blockedAudioAppend.frag.start;
+          if (
+            videoAppendEnd > audioStart ||
+            videoAppendEnd < this.lastVideoAppendEnd ||
+            BufferHelper.isBuffered(videoSb, audioStart)
+          ) {
+            this.unblockAudio();
+          }
+        }
+        this.lastVideoAppendEnd = videoAppendEnd;
+      }
+    }
+
+    const fragStart = (part || frag).start;
     const operation: BufferOperation = {
       execute: () => {
         chunkStats.executeStart = self.performance.now();
@@ -452,7 +560,7 @@ export default class BufferController implements ComponentAPI {
             const delta = fragStart - sb.timestampOffset;
             if (Math.abs(delta) >= 0.1) {
               this.log(
-                `Updating audio SourceBuffer timestampOffset to ${fragStart} (delta: ${delta}) sn: ${frag.sn})`,
+                `Updating audio SourceBuffer timestampOffset to ${fragStart} (delta: ${delta}) sn: ${sn})`,
               );
               sb.timestampOffset = fragStart;
             }
@@ -495,7 +603,7 @@ export default class BufferController implements ComponentAPI {
           timeRanges,
         });
       },
-      onError: (err) => {
+      onError: (error: Error) => {
         // in case any error occured while appending, put back segment in segments table
         const event: ErrorData = {
           type: ErrorTypes.MEDIA_ERROR,
@@ -505,12 +613,12 @@ export default class BufferController implements ComponentAPI {
           frag,
           part,
           chunkMeta,
-          error: err,
-          err,
+          error,
+          err: error,
           fatal: false,
         };
 
-        if (err.code === DOMException.QUOTA_EXCEEDED_ERR) {
+        if ((error as DOMException).code === DOMException.QUOTA_EXCEEDED_ERR) {
           // QuotaExceededError: http://www.w3.org/TR/html5/infrastructure.html#quotaexceedederror
           // let's stop appending any segments, and report BUFFER_FULL_ERROR error
           event.details = ErrorDetails.BUFFER_FULL_ERROR;
@@ -521,30 +629,27 @@ export default class BufferController implements ComponentAPI {
             browser is able to evict some data from sourcebuffer. Retrying can help recover.
           */
           this.warn(
-            `Failed ${appendErrorCount}/${hls.config.appendErrorMaxRetry} times to append segment in "${type}" sourceBuffer`,
+            `Failed ${appendErrorCount}/${this.hls.config.appendErrorMaxRetry} times to append segment in "${type}" sourceBuffer`,
           );
-          if (appendErrorCount >= hls.config.appendErrorMaxRetry) {
+          if (appendErrorCount >= this.hls.config.appendErrorMaxRetry) {
             event.fatal = true;
           }
         }
-        hls.trigger(Events.ERROR, event);
+        this.hls.trigger(Events.ERROR, event);
       },
     };
     operationQueue.append(operation, type, !!this.pendingTracks[type]);
   }
 
-  protected onBufferFlushing(
-    event: Events.BUFFER_FLUSHING,
-    data: BufferFlushingData,
-  ) {
-    const { operationQueue } = this;
-    const flushOperation = (type: SourceBufferName): BufferOperation => ({
-      execute: this.removeExecutor.bind(
-        this,
-        type,
-        data.startOffset,
-        data.endOffset,
-      ),
+  private getFlushOp(
+    type: SourceBufferName,
+    start: number,
+    end: number,
+  ): BufferOperation {
+    return {
+      execute: () => {
+        this.removeExecutor(type, start, end);
+      },
       onStart: () => {
         // logger.debug(`[buffer-controller]: Started flushing ${data.startOffset} -> ${data.endOffset} for ${type} Source Buffer`);
       },
@@ -555,13 +660,26 @@ export default class BufferController implements ComponentAPI {
       onError: (error: Error) => {
         this.warn(`Failed to remove from ${type} SourceBuffer`, error);
       },
-    });
+    };
+  }
 
-    if (data.type) {
-      operationQueue.append(flushOperation(data.type), data.type);
+  protected onBufferFlushing(
+    event: Events.BUFFER_FLUSHING,
+    data: BufferFlushingData,
+  ) {
+    const { operationQueue } = this;
+    const { type, startOffset, endOffset } = data;
+    if (type) {
+      operationQueue.append(
+        this.getFlushOp(type, startOffset, endOffset),
+        type,
+      );
     } else {
-      this.getSourceBufferTypes().forEach((type: SourceBufferName) => {
-        operationQueue.append(flushOperation(type), type);
+      this.getSourceBufferTypes().forEach((sbType: SourceBufferName) => {
+        operationQueue.append(
+          this.getFlushOp(sbType, startOffset, endOffset),
+          sbType,
+        );
       });
     }
   }
@@ -614,6 +732,9 @@ export default class BufferController implements ComponentAPI {
   // on BUFFER_EOS mark matching sourcebuffer(s) as ended and trigger checkEos()
   // an undefined data.type will mark all buffers as EOS.
   protected onBufferEos(event: Events.BUFFER_EOS, data: BufferEOSData) {
+    if (data.type === 'video') {
+      this.unblockAudio();
+    }
     const ended = this.getSourceBufferTypes().reduce((acc, type) => {
       const sb = this.sourceBuffer[type];
       if (sb && (!data.type || data.type === type)) {
@@ -659,12 +780,32 @@ export default class BufferController implements ComponentAPI {
       return;
     }
     this.details = details;
-
-    if (this.getSourceBufferTypes().length) {
-      this.blockBuffers(this.updateMediaElementDuration.bind(this));
-    } else {
-      this.updateMediaElementDuration();
+    const durationAndRange = this.getDurationAndRange();
+    if (!durationAndRange) {
+      return;
     }
+    if (this.getSourceBufferTypes().length) {
+      this.blockBuffers(() => this.updateMediaSource(durationAndRange));
+    } else {
+      this.updateMediaSource(durationAndRange);
+    }
+  }
+
+  private onError(event: Events.ERROR, data: ErrorData) {
+    if (data.details === ErrorDetails.BUFFER_APPEND_ERROR && data.frag) {
+      const nextAutoLevel = data.errorAction?.nextAutoLevel;
+      if (Number.isFinite(nextAutoLevel) && nextAutoLevel !== data.frag.level) {
+        this.resetAppendErrors();
+      }
+    }
+  }
+
+  private resetAppendErrors() {
+    this.appendErrors = {
+      audio: 0,
+      video: 0,
+      audiovideo: 0,
+    };
   }
 
   trimBuffers() {
@@ -815,14 +956,18 @@ export default class BufferController implements ComponentAPI {
    * 'liveDurationInfinity` is set to `true`
    * More details: https://github.com/video-dev/hls.js/issues/355
    */
-  private updateMediaElementDuration() {
+  private getDurationAndRange(): {
+    duration: number;
+    start?: number;
+    end?: number;
+  } | null {
     if (
       !this.details ||
       !this.media ||
       !this.mediaSource ||
       this.mediaSource.readyState !== 'open'
     ) {
-      return;
+      return null;
     }
     const { details, hls, media, mediaSource } = this;
     const levelDuration = details.fragments[0].start + details.totalduration;
@@ -834,31 +979,47 @@ export default class BufferController implements ComponentAPI {
     if (details.live && hls.config.liveDurationInfinity) {
       // Override duration to Infinity
       mediaSource.duration = Infinity;
-      this.updateSeekableRange(details);
+      const len = details.fragments.length;
+      if (len && details.live && !!mediaSource.setLiveSeekableRange) {
+        const start = Math.max(0, details.fragments[0].start);
+        const end = Math.max(start, start + details.totalduration);
+        return { duration: Infinity, start, end };
+      }
+      return { duration: Infinity };
     } else if (
       (levelDuration > msDuration && levelDuration > mediaDuration) ||
       !Number.isFinite(mediaDuration)
     ) {
-      // levelDuration was the last value we set.
-      // not using mediaSource.duration as the browser may tweak this value
-      // only update Media Source duration if its value increase, this is to avoid
-      // flushing already buffered portion when switching between quality level
-      this.log(`Updating Media Source duration to ${levelDuration.toFixed(3)}`);
-      mediaSource.duration = levelDuration;
+      return { duration: levelDuration };
     }
+    return null;
   }
 
-  updateSeekableRange(levelDetails) {
-    const mediaSource = this.mediaSource;
-    const fragments = levelDetails.fragments;
-    const len = fragments.length;
-    if (len && levelDetails.live && mediaSource?.setLiveSeekableRange) {
-      const start = Math.max(0, fragments[0].start);
-      const end = Math.max(start, start + levelDetails.totalduration);
+  private updateMediaSource({
+    duration,
+    start,
+    end,
+  }: {
+    duration: number;
+    start?: number;
+    end?: number;
+  }) {
+    if (
+      !this.media ||
+      !this.mediaSource ||
+      this.mediaSource.readyState !== 'open'
+    ) {
+      return;
+    }
+    if (Number.isFinite(duration)) {
+      this.log(`Updating Media Source duration to ${duration.toFixed(3)}`);
+    }
+    this.mediaSource.duration = duration;
+    if (start !== undefined && end !== undefined) {
       this.log(
-        `Media Source duration is set to ${mediaSource.duration}. Setting seekable range to ${start}-${end}.`,
+        `Media Source duration is set to ${this.mediaSource.duration}. Setting seekable range to ${start}-${end}.`,
       );
-      mediaSource.setLiveSeekableRange(start, end);
+      this.mediaSource.setLiveSeekableRange(start, end);
     }
   }
 
@@ -914,14 +1075,14 @@ export default class BufferController implements ComponentAPI {
             `source buffer exists for track ${trackName}, however track does not`,
           );
         }
-        // use levelCodec as first priority
-        let codec = track.levelCodec || track.codec;
+        // use levelCodec as first priority unless it contains multiple comma-separated codec values
+        let codec =
+          track.levelCodec?.indexOf(',') === -1
+            ? track.levelCodec
+            : track.codec;
         if (codec) {
           if (trackName.slice(0, 5) === 'audio') {
-            codec = getCodecCompatibleName(
-              codec,
-              this.hls.config.preferManagedMediaSource,
-            );
+            codec = getCodecCompatibleName(codec, this.appendSource);
           }
         }
         const mimeType = `${track.container};codecs=${codec}`;
@@ -934,19 +1095,21 @@ export default class BufferController implements ComponentAPI {
           this.addBufferListener(sbName, 'updateend', this._onSBUpdateEnd);
           this.addBufferListener(sbName, 'error', this._onSBUpdateError);
           // ManagedSourceBuffer bufferedchange event
-          this.addBufferListener(
-            sbName,
-            'bufferedchange',
-            (type: SourceBufferName, event: BufferedChangeEvent) => {
-              // If media was ejected check for a change. Added ranges are redundant with changes on 'updateend' event.
-              const removedRanges = event.removedRanges;
-              if (removedRanges?.length) {
-                this.hls.trigger(Events.BUFFER_FLUSHED, {
-                  type: trackName as SourceBufferName,
-                });
-              }
-            },
-          );
+          if (this.appendSource) {
+            this.addBufferListener(
+              sbName,
+              'bufferedchange',
+              (type: SourceBufferName, event: BufferedChangeEvent) => {
+                // If media was ejected check for a change. Added ranges are redundant with changes on 'updateend' event.
+                const removedRanges = event.removedRanges;
+                if (removedRanges?.length) {
+                  this.hls.trigger(Events.BUFFER_FLUSHED, {
+                    type: trackName as SourceBufferName,
+                  });
+                }
+              },
+            );
+          }
 
           this.tracks[trackName] = {
             buffer: sb,
@@ -977,7 +1140,10 @@ export default class BufferController implements ComponentAPI {
     this.log('Media source opened');
     if (media) {
       media.removeEventListener('emptied', this._onMediaEmptied);
-      this.updateMediaElementDuration();
+      const durationAndRange = this.getDurationAndRange();
+      if (durationAndRange) {
+        this.updateMediaSource(durationAndRange);
+      }
       this.hls.trigger(Events.MEDIA_ATTACHED, {
         media,
         mediaSource: mediaSource as MediaSource,
@@ -1002,7 +1168,7 @@ export default class BufferController implements ComponentAPI {
   private _onMediaEmptied = () => {
     const { mediaSrc, _objectUrl } = this;
     if (mediaSrc !== _objectUrl) {
-      logger.error(
+      this.error(
         `Media element src was set while attaching MediaSource (${_objectUrl} > ${mediaSrc})`,
       );
     }
@@ -1032,7 +1198,9 @@ export default class BufferController implements ComponentAPI {
   }
 
   private _onSBUpdateError(type: SourceBufferName, event: Event) {
-    const error = new Error(`${type} SourceBuffer error`);
+    const error = new Error(
+      `${type} SourceBuffer error. MediaSource readyState: ${this.mediaSource?.readyState}`,
+    );
     this.error(`${error}`, event);
     // according to http://www.w3.org/TR/media-source/#sourcebuffer-append-error
     // SourceBuffer errors are not necessarily fatal; if so, the HTMLMediaElement will fire an error event
@@ -1046,7 +1214,7 @@ export default class BufferController implements ComponentAPI {
     // updateend is always fired after error, so we'll allow that to shift the current operation off of the queue
     const operation = this.operationQueue.current(type);
     if (operation) {
-      operation.onError(event);
+      operation.onError(error);
     }
   }
 
@@ -1096,7 +1264,7 @@ export default class BufferController implements ComponentAPI {
       }
       return;
     }
-
+    sb.ending = false;
     sb.ended = false;
     sb.appendBuffer(data);
   }
@@ -1119,10 +1287,14 @@ export default class BufferController implements ComponentAPI {
     const blockingOperations = buffers.map((type) =>
       operationQueue.appendBlocker(type as SourceBufferName),
     );
-    Promise.all(blockingOperations).then(() => {
+    const audioBlocked = buffers.length > 1 && !!this.blockedAudioAppend;
+    if (audioBlocked) {
+      this.unblockAudio();
+    }
+    Promise.all(blockingOperations).then((result) => {
       // logger.debug(`[buffer-controller]: Blocking operation resolved; unblocking ${buffers} SourceBuffer`);
       onUnblocked();
-      buffers.forEach((type) => {
+      buffers.forEach((type, i) => {
         const sb = this.sourceBuffer[type];
         // Only cycle the queue if the SB is not updating. There's a bug in Chrome which sets the SB updating flag to
         // true when changing the MediaSource duration (https://bugs.chromium.org/p/chromium/issues/detail?id=959359&can=2&q=mediasource%20duration)

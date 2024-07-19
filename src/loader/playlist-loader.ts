@@ -8,7 +8,6 @@
 
 import { Events } from '../events';
 import { ErrorDetails, ErrorTypes } from '../errors';
-import { logger } from '../utils/logger';
 import M3U8Parser from './m3u8-parser';
 import type { LevelParsed, VariableMap } from '../types/level';
 import type {
@@ -221,10 +220,10 @@ class PlaylistLoader implements NetworkComponentAPI {
         loaderContext.level === context.level
       ) {
         // same URL can't overlap
-        logger.trace('[playlist-loader]: playlist request ongoing');
+        this.hls.logger.trace('[playlist-loader]: playlist request ongoing');
         return;
       }
-      logger.log(
+      this.hls.logger.log(
         `[playlist-loader]: aborting previous loader for type: ${context.type}`,
       );
       loader.abort();
@@ -408,7 +407,7 @@ class PlaylistLoader implements NetworkComponentAPI {
         levels[0].audioCodec &&
         !levels[0].attrs.AUDIO
       ) {
-        logger.log(
+        this.hls.logger.log(
           '[playlist-loader]: audio codec signaled in quality level, but no embedded audio track signaled, create one',
         );
         audioTracks.unshift({
@@ -453,7 +452,6 @@ class PlaylistLoader implements NetworkComponentAPI {
     const { id, level, type } = context;
 
     const url = getResponseUrl(response, context);
-    const levelUrlId = 0;
     const levelId = Number.isFinite(level as number)
       ? (level as number)
       : Number.isFinite(id as number)
@@ -465,7 +463,7 @@ class PlaylistLoader implements NetworkComponentAPI {
       url,
       levelId,
       levelType,
-      levelUrlId,
+      0,
       this.variableList,
     );
 
@@ -555,7 +553,7 @@ class PlaylistLoader implements NetworkComponentAPI {
       message += ` id: ${context.id} group-id: "${context.groupId}"`;
     }
     const error = new Error(message);
-    logger.warn(`[playlist-loader]: ${message}`);
+    this.hls.logger.warn(`[playlist-loader]: ${message}`);
     let details = ErrorDetails.UNKNOWN;
     let fatal = false;
 

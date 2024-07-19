@@ -1,15 +1,15 @@
 import { Events } from '../events';
-import Hls from '../hls';
+import type Hls from '../hls';
 import { Cmcd } from '@svta/common-media-library/cmcd/Cmcd';
 import { CmcdObjectType } from '@svta/common-media-library/cmcd/CmcdObjectType';
 import { CmcdStreamingFormat } from '@svta/common-media-library/cmcd/CmcdStreamingFormat';
 import { appendCmcdHeaders } from '@svta/common-media-library/cmcd/appendCmcdHeaders';
 import { appendCmcdQuery } from '@svta/common-media-library/cmcd/appendCmcdQuery';
+import type { CmcdEncodeOptions } from '@svta/common-media-library/cmcd/CmcdEncodeOptions';
 import { uuid } from '@svta/common-media-library/utils/uuid';
 import { BufferHelper } from '../utils/buffer-helper';
-import { logger } from '../utils/logger';
 import type { ComponentAPI } from '../types/component-api';
-import type { Fragment } from '../loader/fragment';
+import type { Fragment, Part } from '../loader/fragment';
 import type { BufferCreatedData, MediaAttachedData } from '../types/events';
 import type {
   FragmentLoaderContext,
@@ -80,6 +80,8 @@ export default class CMCDController implements ComponentAPI {
 
     // @ts-ignore
     this.hls = this.config = this.audioBuffer = this.videoBuffer = null;
+    // @ts-ignore
+    this.onWaiting = this.onPlaying = this.media = null;
   }
 
   private onMediaAttached(
@@ -163,7 +165,7 @@ export default class CMCDController implements ComponentAPI {
       data.su = this.buffering;
     }
 
-    // TODO: Implement rtp, nrr, nor, dl
+    // TODO: Implement rtp, nrr, dl
 
     const { includeKeys } = this;
     if (includeKeys) {
@@ -173,14 +175,18 @@ export default class CMCDController implements ComponentAPI {
       }, {});
     }
 
+    const options: CmcdEncodeOptions = {
+      baseUrl: context.url,
+    };
+
     if (this.useHeaders) {
       if (!context.headers) {
         context.headers = {};
       }
 
-      appendCmcdHeaders(context.headers, data);
+      appendCmcdHeaders(context.headers, data, options);
     } else {
-      context.url = appendCmcdQuery(context.url, data);
+      context.url = appendCmcdQuery(context.url, data, options);
     }
   }
 
@@ -194,7 +200,7 @@ export default class CMCDController implements ComponentAPI {
         su: !this.initialized,
       });
     } catch (error) {
-      logger.warn('Could not generate manifest CMCD data.', error);
+      this.hls.logger.warn('Could not generate manifest CMCD data.', error);
     }
   };
 
@@ -203,11 +209,11 @@ export default class CMCDController implements ComponentAPI {
    */
   private applyFragmentData = (context: FragmentLoaderContext) => {
     try {
-      const fragment = context.frag;
-      const level = this.hls.levels[fragment.level];
-      const ot = this.getObjectType(fragment);
+      const { frag, part } = context;
+      const level = this.hls.levels[frag.level];
+      const ot = this.getObjectType(frag);
       const data: Cmcd = {
-        d: fragment.duration * 1000,
+        d: (part || frag).duration * 1000,
         ot,
       };
 
@@ -221,11 +227,44 @@ export default class CMCDController implements ComponentAPI {
         data.bl = this.getBufferLength(ot);
       }
 
+      const next = part ? this.getNextPart(part) : this.getNextFrag(frag);
+
+      if (next?.url && next.url !== frag.url) {
+        data.nor = next.url;
+      }
+
       this.apply(context, data);
     } catch (error) {
-      logger.warn('Could not generate segment CMCD data.', error);
+      this.hls.logger.warn('Could not generate segment CMCD data.', error);
     }
   };
+
+  private getNextFrag(fragment: Fragment): Fragment | undefined {
+    const levelDetails = this.hls.levels[fragment.level]?.details;
+    if (levelDetails) {
+      const index = (fragment.sn as number) - levelDetails.startSN;
+      return levelDetails.fragments[index + 1];
+    }
+
+    return undefined;
+  }
+
+  private getNextPart(part: Part): Part | undefined {
+    const { index, fragment } = part;
+    const partList = this.hls.levels[fragment.level]?.details?.partList;
+
+    if (partList) {
+      const { sn } = fragment;
+      for (let i = partList.length - 1; i >= 0; i--) {
+        const p = partList[i];
+        if (p.index === index && p.fragment.sn === sn) {
+          return partList[i + 1];
+        }
+      }
+    }
+
+    return undefined;
+  }
 
   /**
    * The CMCD object type.
@@ -285,7 +324,7 @@ export default class CMCDController implements ComponentAPI {
    * Get the buffer length for a media type in milliseconds
    */
   private getBufferLength(type: CmcdObjectType) {
-    const media = this.hls.media;
+    const media = this.media;
     const buffer =
       type === CmcdObjectType.AUDIO ? this.audioBuffer : this.videoBuffer;
 

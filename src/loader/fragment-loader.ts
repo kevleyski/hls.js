@@ -1,18 +1,17 @@
 import { ErrorTypes, ErrorDetails } from '../errors';
-import { Fragment } from './fragment';
-import {
-  Loader,
-  LoaderConfiguration,
-  FragmentLoaderContext,
-} from '../types/loader';
 import { getLoaderConfigWithoutReties } from '../utils/error-helper';
 import type { HlsConfig } from '../config';
-import type { BaseSegment, Part } from './fragment';
+import type { BaseSegment, Fragment, Part } from './fragment';
 import type {
   ErrorData,
   FragLoadedData,
   PartsLoadedData,
 } from '../types/events';
+import type {
+  Loader,
+  LoaderConfiguration,
+  FragmentLoaderContext,
+} from '../types/loader';
 
 const MIN_CHUNK_SIZE = Math.pow(2, 17); // 128kb
 
@@ -77,13 +76,11 @@ export default class FragmentLoader {
           frag.gap = false;
         }
       }
-      const loader =
-        (this.loader =
-        frag.loader =
-          FragmentILoader
-            ? new FragmentILoader(config)
-            : (new DefaultILoader(config) as Loader<FragmentLoaderContext>));
+      const loader = (this.loader = FragmentILoader
+        ? new FragmentILoader(config)
+        : (new DefaultILoader(config) as Loader<FragmentLoaderContext>));
       const loaderContext = createLoaderContext(frag);
+      frag.loader = loader;
       const loadPolicy = getLoaderConfigWithoutReties(
         config.fragLoadPolicy.default,
       );
@@ -188,13 +185,11 @@ export default class FragmentLoader {
         reject(createGapLoadError(frag, part));
         return;
       }
-      const loader =
-        (this.loader =
-        frag.loader =
-          FragmentILoader
-            ? new FragmentILoader(config)
-            : (new DefaultILoader(config) as Loader<FragmentLoaderContext>));
+      const loader = (this.loader = FragmentILoader
+        ? new FragmentILoader(config)
+        : (new DefaultILoader(config) as Loader<FragmentLoaderContext>));
       const loaderContext = createLoaderContext(frag, part);
+      frag.loader = loader;
       // Should we define another load policy for parts?
       const loadPolicy = getLoaderConfigWithoutReties(
         config.fragLoadPolicy.default,
@@ -336,8 +331,11 @@ function createLoaderContext(
   if (Number.isFinite(start) && Number.isFinite(end)) {
     let byteRangeStart = start;
     let byteRangeEnd = end;
-    if (frag.sn === 'initSegment' && frag.decryptdata?.method === 'AES-128') {
-      // MAP segment encrypted with method 'AES-128', when served with HTTP Range,
+    if (
+      frag.sn === 'initSegment' &&
+      isMethodFullSegmentAesCbc(frag.decryptdata?.method)
+    ) {
+      // MAP segment encrypted with method 'AES-128' or 'AES-256' (cbc), when served with HTTP Range,
       // has the unencrypted size specified in the range.
       // Ref: https://tools.ietf.org/html/draft-pantos-hls-rfc8216bis-08#section-6.3.6
       const fragmentLen = end - start;
@@ -370,6 +368,10 @@ function createGapLoadError(frag: Fragment, part?: Part): LoadError {
   }
   (part ? part : frag).stats.aborted = true;
   return new LoadError(errorData);
+}
+
+function isMethodFullSegmentAesCbc(method) {
+  return method === 'AES-128' || method === 'AES-256';
 }
 
 export class LoadError extends Error {

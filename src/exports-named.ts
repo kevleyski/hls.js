@@ -1,7 +1,7 @@
 import Hls from './hls';
 import { Events } from './events';
 import { ErrorTypes, ErrorDetails } from './errors';
-import { Level } from './types/level';
+import type { Level } from './types/level';
 import AbrController from './controller/abr-controller';
 import AudioTrackController from './controller/audio-track-controller';
 import AudioStreamController from './controller/audio-stream-controller';
@@ -55,3 +55,5 @@ export {
   ErrorActionFlags,
 } from './controller/error-controller';
 export { AttrList } from './utils/attr-list';
+export { isSupported, isMSESupported } from './is-supported';
+export { getMediaSource } from './utils/mediasource-helper';

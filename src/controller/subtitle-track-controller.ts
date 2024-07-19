@@ -9,8 +9,12 @@ import {
   mediaAttributesIdentical,
   subtitleTrackMatchesTextTrack,
 } from '../utils/media-option-attributes';
+import { findMatchingOption, matchesOption } from '../utils/rendition-helper';
 import type Hls from '../hls';
-import type { MediaPlaylist } from '../types/media-playlist';
+import type {
+  MediaPlaylist,
+  SubtitleSelectionOption,
+} from '../types/media-playlist';
 import type { HlsUrlParameters } from '../types/level';
 import type {
   ErrorData,
@@ -31,14 +35,14 @@ class SubtitleTrackController extends BasePlaylistController {
   private currentTrack: MediaPlaylist | null = null;
   private selectDefaultTrack: boolean = true;
   private queuedDefaultTrack: number = -1;
-  private trackChangeListener: () => void = () => this.onTextTracksChanged();
-  private asyncPollTrackChange: () => void = () => this.pollTrackChange(0);
   private useTextTrackPolling: boolean = false;
   private subtitlePollingInterval: number = -1;
   private _subtitleDisplay: boolean = true;
 
+  private asyncPollTrackChange = () => this.pollTrackChange(0);
+
   constructor(hls: Hls) {
-    super(hls, '[subtitle-track-controller]');
+    super(hls, 'subtitle-track-controller');
     this.registerListeners();
   }
 
@@ -47,7 +51,8 @@ class SubtitleTrackController extends BasePlaylistController {
     this.tracks.length = 0;
     this.tracksInGroup.length = 0;
     this.currentTrack = null;
-    this.trackChangeListener = this.asyncPollTrackChange = null as any;
+    // @ts-ignore
+    this.onTextTracksChanged = this.asyncPollTrackChange = null;
     super.destroy();
   }
 
@@ -117,7 +122,7 @@ class SubtitleTrackController extends BasePlaylistController {
   private pollTrackChange(timeout: number) {
     self.clearInterval(this.subtitlePollingInterval);
     this.subtitlePollingInterval = self.setInterval(
-      this.trackChangeListener,
+      this.onTextTracksChanged,
       timeout,
     );
   }
@@ -212,7 +217,7 @@ class SubtitleTrackController extends BasePlaylistController {
     }
     const subtitleGroups = levelInfo.subtitleGroups || null;
     const currentGroups = this.groupIds;
-    const currentTrack = this.currentTrack;
+    let currentTrack = this.currentTrack;
     if (
       !subtitleGroups ||
       currentGroups?.length !== subtitleGroups?.length ||
@@ -230,9 +235,7 @@ class SubtitleTrackController extends BasePlaylistController {
         // Disable selectDefaultTrack if there are no default tracks
         if (
           this.selectDefaultTrack &&
-          !subtitleTracks.some(
-            (track) => track.default || track.forced || track.autoselect,
-          )
+          !subtitleTracks.some((track) => track.default)
         ) {
           this.selectDefaultTrack = false;
         }
@@ -244,13 +247,31 @@ class SubtitleTrackController extends BasePlaylistController {
         // Do not dispatch SUBTITLE_TRACKS_UPDATED when there were and are no tracks
         return;
       }
-
       this.tracksInGroup = subtitleTracks;
+
+      // Find preferred track
+      const subtitlePreference = this.hls.config.subtitlePreference;
+      if (!currentTrack && subtitlePreference) {
+        this.selectDefaultTrack = false;
+        const groupIndex = findMatchingOption(
+          subtitlePreference,
+          subtitleTracks,
+        );
+        if (groupIndex > -1) {
+          currentTrack = subtitleTracks[groupIndex];
+        } else {
+          const allIndex = findMatchingOption(subtitlePreference, this.tracks);
+          currentTrack = this.tracks[allIndex];
+        }
+      }
+
+      // Select initial track
       let trackId = this.findTrackId(currentTrack);
       if (trackId === -1 && currentTrack) {
         trackId = this.findTrackId(null);
       }
 
+      // Dispatch events and load track if needed
       const subtitleTracksUpdated: SubtitleTracksUpdatedData = {
         subtitleTracks,
       };
@@ -276,33 +297,37 @@ class SubtitleTrackController extends BasePlaylistController {
     for (let i = 0; i < tracks.length; i++) {
       const track = tracks[i];
       if (
-        (selectDefault &&
-          !track.default &&
-          !track.forced &&
-          !track.autoselect) ||
+        (selectDefault && !track.default) ||
         (!selectDefault && !currentTrack)
       ) {
         continue;
       }
-      if (
-        !currentTrack ||
-        mediaAttributesIdentical(currentTrack.attrs, track.attrs)
-      ) {
-        return track.id;
+      if (!currentTrack || matchesOption(track, currentTrack)) {
+        return i;
       }
-      if (
-        mediaAttributesIdentical(currentTrack.attrs, track.attrs, [
-          'LANGUAGE',
-          'ASSOC-LANGUAGE',
-          'CHARACTERISTICS',
-        ])
-      ) {
-        return track.id;
+    }
+    if (currentTrack) {
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        if (
+          mediaAttributesIdentical(currentTrack.attrs, track.attrs, [
+            'LANGUAGE',
+            'ASSOC-LANGUAGE',
+            'CHARACTERISTICS',
+          ])
+        ) {
+          return i;
+        }
       }
-      if (
-        mediaAttributesIdentical(currentTrack.attrs, track.attrs, ['LANGUAGE'])
-      ) {
-        return track.id;
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        if (
+          mediaAttributesIdentical(currentTrack.attrs, track.attrs, [
+            'LANGUAGE',
+          ])
+        ) {
+          return i;
+        }
       }
     }
     return -1;
@@ -352,6 +377,47 @@ class SubtitleTrackController extends BasePlaylistController {
   set subtitleTrack(newId: number) {
     this.selectDefaultTrack = false;
     this.setSubtitleTrack(newId);
+  }
+
+  public setSubtitleOption(
+    subtitleOption: MediaPlaylist | SubtitleSelectionOption | undefined,
+  ): MediaPlaylist | null {
+    this.hls.config.subtitlePreference = subtitleOption;
+    if (subtitleOption) {
+      const allSubtitleTracks = this.allSubtitleTracks;
+      this.selectDefaultTrack = false;
+      if (allSubtitleTracks.length) {
+        // First see if current option matches (no switch op)
+        const currentTrack = this.currentTrack;
+        if (currentTrack && matchesOption(subtitleOption, currentTrack)) {
+          return currentTrack;
+        }
+        // Find option in current group
+        const groupIndex = findMatchingOption(
+          subtitleOption,
+          this.tracksInGroup,
+        );
+        if (groupIndex > -1) {
+          const track = this.tracksInGroup[groupIndex];
+          this.setSubtitleTrack(groupIndex);
+          return track;
+        } else if (currentTrack) {
+          // If this is not the initial selection return null
+          // option should have matched one in active group
+          return null;
+        } else {
+          // Find the option in all tracks for initial selection
+          const allIndex = findMatchingOption(
+            subtitleOption,
+            allSubtitleTracks,
+          );
+          if (allIndex > -1) {
+            return allSubtitleTracks[allIndex];
+          }
+        }
+      }
+    }
+    return null;
   }
 
   protected loadPlaylist(hlsUrlParameters?: HlsUrlParameters): void {
@@ -434,7 +500,7 @@ class SubtitleTrackController extends BasePlaylistController {
     }
 
     // exit if track id as already set or invalid
-    if (newId < -1 || newId >= tracks.length) {
+    if (newId < -1 || newId >= tracks.length || !Number.isFinite(newId)) {
       this.warn(`Invalid subtitle track id: ${newId}`);
       return;
     }
@@ -453,7 +519,7 @@ class SubtitleTrackController extends BasePlaylistController {
       this.hls.trigger(Events.SUBTITLE_TRACK_SWITCH, { id: newId });
       return;
     }
-    const trackLoaded = track.details && !track.details.live;
+    const trackLoaded = !!track.details && !track.details.live;
     if (newId === this.trackId && track === lastTrack && trackLoaded) {
       return;
     }
@@ -471,11 +537,15 @@ class SubtitleTrackController extends BasePlaylistController {
       type,
       url,
     });
-    const hlsUrlParameters = this.switchParams(track.url, lastTrack?.details);
+    const hlsUrlParameters = this.switchParams(
+      track.url,
+      lastTrack?.details,
+      track.details,
+    );
     this.loadPlaylist(hlsUrlParameters);
   }
 
-  private onTextTracksChanged(): void {
+  private onTextTracksChanged = () => {
     if (!this.useTextTrackPolling) {
       self.clearInterval(this.subtitlePollingInterval);
     }
@@ -501,7 +571,7 @@ class SubtitleTrackController extends BasePlaylistController {
     if (this.subtitleTrack !== trackId) {
       this.setSubtitleTrack(trackId);
     }
-  }
+  };
 }
 
 export default SubtitleTrackController;

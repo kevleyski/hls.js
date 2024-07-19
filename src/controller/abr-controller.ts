@@ -2,7 +2,7 @@ import EwmaBandWidthEstimator from '../utils/ewma-bandwidth-estimator';
 import { Events } from '../events';
 import { ErrorDetails } from '../errors';
 import { PlaylistLevelType } from '../types/loader';
-import { logger } from '../utils/logger';
+import { Logger } from '../utils/logger';
 import {
   SUPPORTED_INFO_DEFAULT,
   getMediaDecodingInfoPromise,
@@ -31,16 +31,16 @@ import type {
 } from '../types/events';
 import type { AbrComponentAPI } from '../types/component-api';
 
-class AbrController implements AbrComponentAPI {
+class AbrController extends Logger implements AbrComponentAPI {
   protected hls: Hls;
   private lastLevelLoadSec: number = 0;
   private lastLoadedFragLevel: number = -1;
+  private firstSelection: number = -1;
   private _nextAutoLevel: number = -1;
   private nextAutoLevelKey: string = '';
   private audioTracksByGroup: AudioTracksByGroup | null = null;
   private codecTiers: Record<string, CodecSetTier> | null = null;
   private timer: number = -1;
-  private onCheck: Function = this._abandonRulesCheck.bind(this);
   private fragCurrent: Fragment | null = null;
   private partCurrent: Part | null = null;
   private bitrateTestDelay: number = 0;
@@ -48,6 +48,7 @@ class AbrController implements AbrComponentAPI {
   public bwEstimator: EwmaBandWidthEstimator;
 
   constructor(hls: Hls) {
+    super('abr', hls.logger);
     this.hls = hls;
     this.bwEstimator = this.initEstimator();
     this.registerListeners();
@@ -55,11 +56,13 @@ class AbrController implements AbrComponentAPI {
 
   public resetEstimator(abrEwmaDefaultEstimate?: number) {
     if (abrEwmaDefaultEstimate) {
-      logger.log(`setting initial bwe to ${abrEwmaDefaultEstimate}`);
+      this.log(`setting initial bwe to ${abrEwmaDefaultEstimate}`);
       this.hls.config.abrEwmaDefaultEstimate = abrEwmaDefaultEstimate;
     }
+    this.firstSelection = -1;
     this.bwEstimator = this.initEstimator();
   }
+
   private initEstimator(): EwmaBandWidthEstimator {
     const config = this.hls.config;
     return new EwmaBandWidthEstimator(
@@ -78,6 +81,7 @@ class AbrController implements AbrComponentAPI {
     hls.on(Events.LEVEL_SWITCHING, this.onLevelSwitching, this);
     hls.on(Events.LEVEL_LOADED, this.onLevelLoaded, this);
     hls.on(Events.LEVELS_UPDATED, this.onLevelsUpdated, this);
+    hls.on(Events.MAX_AUTO_LEVEL_UPDATED, this.onMaxAutoLevelUpdated, this);
     hls.on(Events.ERROR, this.onError, this);
   }
 
@@ -93,6 +97,7 @@ class AbrController implements AbrComponentAPI {
     hls.off(Events.LEVEL_SWITCHING, this.onLevelSwitching, this);
     hls.off(Events.LEVEL_LOADED, this.onLevelLoaded, this);
     hls.off(Events.LEVELS_UPDATED, this.onLevelsUpdated, this);
+    hls.off(Events.MAX_AUTO_LEVEL_UPDATED, this.onMaxAutoLevelUpdated, this);
     hls.off(Events.ERROR, this.onError, this);
   }
 
@@ -100,7 +105,7 @@ class AbrController implements AbrComponentAPI {
     this.unregisterListeners();
     this.clearTimer();
     // @ts-ignore
-    this.hls = this.onCheck = null;
+    this.hls = this._abandonRulesCheck = null;
     this.fragCurrent = this.partCurrent = null;
   }
 
@@ -109,6 +114,7 @@ class AbrController implements AbrComponentAPI {
     data: ManifestLoadingData,
   ) {
     this.lastLoadedFragLevel = -1;
+    this.firstSelection = -1;
     this.lastLevelLoadSec = 0;
     this.fragCurrent = this.partCurrent = null;
     this.onLevelsUpdated();
@@ -120,9 +126,14 @@ class AbrController implements AbrComponentAPI {
       this.lastLoadedFragLevel = this.fragCurrent.level;
     }
     this._nextAutoLevel = -1;
-    this.nextAutoLevelKey = '';
+    this.onMaxAutoLevelUpdated();
     this.codecTiers = null;
     this.audioTracksByGroup = null;
+  }
+
+  private onMaxAutoLevelUpdated() {
+    this.firstSelection = -1;
+    this.nextAutoLevelKey = '';
   }
 
   protected onFragLoading(event: Events.FRAG_LOADING, data: FragLoadingData) {
@@ -135,7 +146,7 @@ class AbrController implements AbrComponentAPI {
       this.partCurrent = data.part ?? null;
     }
     this.clearTimer();
-    this.timer = self.setInterval(this.onCheck, 100);
+    this.timer = self.setInterval(this._abandonRulesCheck, 100);
   }
 
   protected onLevelSwitching(
@@ -154,6 +165,36 @@ class AbrController implements AbrComponentAPI {
       case ErrorDetails.BUFFER_APPEND_ERROR:
         // Reset last loaded level so that a new selection can be made after calling recoverMediaError
         this.lastLoadedFragLevel = -1;
+        this.firstSelection = -1;
+        break;
+      case ErrorDetails.FRAG_LOAD_TIMEOUT: {
+        const frag = data.frag;
+        const { fragCurrent, partCurrent: part } = this;
+        if (
+          frag &&
+          fragCurrent &&
+          frag.sn === fragCurrent.sn &&
+          frag.level === fragCurrent.level
+        ) {
+          const now = performance.now();
+          const stats: LoaderStats = part ? part.stats : frag.stats;
+          const timeLoading = now - stats.loading.start;
+          const ttfb = stats.loading.first
+            ? stats.loading.first - stats.loading.start
+            : -1;
+          const loadedFirstByte = stats.loaded && ttfb > -1;
+          if (loadedFirstByte) {
+            const ttfbEstimate = this.bwEstimator.getEstimateTTFB();
+            this.bwEstimator.sample(
+              timeLoading - Math.min(ttfbEstimate, ttfb),
+              stats.loaded,
+            );
+          } else {
+            this.bwEstimator.sampleTTFB(timeLoading);
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -186,7 +227,7 @@ class AbrController implements AbrComponentAPI {
       This method monitors the download rate of the current fragment, and will downswitch if that fragment will not load
       quickly enough to prevent underbuffering
     */
-  private _abandonRulesCheck() {
+  private _abandonRulesCheck = () => {
     const { fragCurrent: frag, partCurrent: part, hls } = this;
     const { autoLevelEnabled, media } = hls;
     if (!frag || !media) {
@@ -237,11 +278,6 @@ class AbrController implements AbrComponentAPI {
 
     // bufferStarvationDelay is an estimate of the amount time (in seconds) it will take to exhaust the buffer
     const bufferStarvationDelay = bufferInfo.len / playbackRate;
-    // Only downswitch if less than 2 fragment lengths are buffered
-    if (bufferStarvationDelay >= (2 * duration) / playbackRate) {
-      return;
-    }
-
     const ttfb = stats.loading.first
       ? stats.loading.first - stats.loading.start
       : -1;
@@ -251,7 +287,7 @@ class AbrController implements AbrComponentAPI {
     const level = levels[frag.level];
     const expectedLen =
       stats.total ||
-      Math.max(stats.loaded, Math.round((duration * level.maxBitrate) / 8));
+      Math.max(stats.loaded, Math.round((duration * level.averageBitrate) / 8));
     let timeStreaming = loadedFirstByte ? timeLoading - ttfb : timeLoading;
     if (timeStreaming < 1 && loadedFirstByte) {
       timeStreaming = Math.min(timeLoading, (stats.loaded * 8) / bwEstimate);
@@ -300,7 +336,7 @@ class AbrController implements AbrComponentAPI {
     if (fragLevelNextLoadedDelay > duration * 10) {
       return;
     }
-    hls.nextLoadLevel = nextLoadLevel;
+    hls.nextLoadLevel = hls.nextAutoLevel = nextLoadLevel;
     if (loadedFirstByte) {
       // If there has been loading progress, sample bandwidth using loading time offset by minimum TTFB time
       this.bwEstimator.sample(
@@ -311,9 +347,16 @@ class AbrController implements AbrComponentAPI {
       // If there has been no loading progress, sample TTFB
       this.bwEstimator.sampleTTFB(timeLoading);
     }
+    const nextLoadLevelBitrate = levels[nextLoadLevel].maxBitrate;
+    if (
+      this.getBwEstimate() * this.hls.config.abrBandWidthUpFactor >
+      nextLoadLevelBitrate
+    ) {
+      this.resetEstimator(nextLoadLevelBitrate);
+    }
 
     this.clearTimer();
-    logger.warn(`[abr] Fragment ${frag.sn}${
+    this.warn(`Fragment ${frag.sn}${
       part ? ' part ' + part.index : ''
     } of level ${frag.level} is loading too slowly;
       Time to underbuffer: ${bufferStarvationDelay.toFixed(3)} s
@@ -321,18 +364,14 @@ class AbrController implements AbrComponentAPI {
       Estimated load time for down switch fragment: ${fragLevelNextLoadedDelay.toFixed(
         3,
       )} s
-      TTFB estimate: ${ttfb}
+      TTFB estimate: ${ttfb | 0} ms
       Current BW estimate: ${
-        Number.isFinite(bwEstimate) ? (bwEstimate / 1024).toFixed(3) : 'Unknown'
-      } Kb/s
-      New BW estimate: ${(this.getBwEstimate() / 1024).toFixed(3)} Kb/s
-      Aborting and switching to level ${nextLoadLevel}`);
-    if (frag.loader) {
-      this.fragCurrent = this.partCurrent = null;
-      frag.abortRequests();
-    }
+        Number.isFinite(bwEstimate) ? bwEstimate | 0 : 'Unknown'
+      } bps
+      New BW estimate: ${this.getBwEstimate() | 0} bps
+      Switching to level ${nextLoadLevel} @ ${nextLoadLevelBitrate | 0} bps`);
     hls.trigger(Events.FRAG_LOAD_EMERGENCY_ABORTED, { frag, part, stats });
-  }
+  };
 
   protected onFragLoaded(
     event: Events.FRAG_LOADED,
@@ -348,7 +387,10 @@ class AbrController implements AbrComponentAPI {
     // stop monitoring bw once frag loaded
     this.clearTimer();
     // reset forced auto level value so that next level will be selected
-    this._nextAutoLevel = -1;
+    if (frag.level === this._nextAutoLevel) {
+      this._nextAutoLevel = -1;
+    }
+    this.firstSelection = -1;
 
     // compute level average bitrate
     if (this.hls.config.abrMaxWithRealBitrate) {
@@ -420,11 +462,12 @@ class AbrController implements AbrComponentAPI {
     }
   }
 
-  get firstAutoLevel(): number {
+  public get firstAutoLevel(): number {
     const { maxAutoLevel, minAutoLevel } = this.hls;
+    const bwEstimate = this.getBwEstimate();
     const maxStartDelay = this.hls.config.maxStarvationDelay;
     const abrAutoLevel = this.findBestLevel(
-      this.getBwEstimate(),
+      bwEstimate,
       minAutoLevel,
       maxAutoLevel,
       0,
@@ -437,13 +480,13 @@ class AbrController implements AbrComponentAPI {
     }
     const firstLevel = this.hls.firstLevel;
     const clamped = Math.min(Math.max(firstLevel, minAutoLevel), maxAutoLevel);
-    logger.warn(
-      `[abr] Could not find best starting auto level. Defaulting to first in playlist ${firstLevel} clamped to ${clamped}`,
+    this.warn(
+      `Could not find best starting auto level. Defaulting to first in playlist ${firstLevel} clamped to ${clamped}`,
     );
     return clamped;
   }
 
-  get forcedAutoLevel(): number {
+  public get forcedAutoLevel(): number {
     if (this.nextAutoLevelKey) {
       return -1;
     }
@@ -451,8 +494,8 @@ class AbrController implements AbrComponentAPI {
   }
 
   // return next auto level
-  get nextAutoLevel(): number {
-    const forcedAutoLevel = this._nextAutoLevel;
+  public get nextAutoLevel(): number {
+    const forcedAutoLevel = this.forcedAutoLevel;
     const bwEstimator = this.bwEstimator;
     const useEstimate = bwEstimator.canEstimate();
     const loadedFirstFrag = this.lastLoadedFragLevel > -1;
@@ -467,24 +510,20 @@ class AbrController implements AbrComponentAPI {
     }
 
     // compute next level using ABR logic
-    let nextABRAutoLevel =
+    const nextABRAutoLevel =
       useEstimate && loadedFirstFrag
         ? this.getNextABRAutoLevel()
         : this.firstAutoLevel;
 
-    // use forced auto level when ABR selected level has errored
+    // use forced auto level while it hasn't errored more than ABR selection
     if (forcedAutoLevel !== -1) {
       const levels = this.hls.levels;
       if (
         levels.length > Math.max(forcedAutoLevel, nextABRAutoLevel) &&
-        levels[forcedAutoLevel].loadError < levels[nextABRAutoLevel].loadError
+        levels[forcedAutoLevel].loadError <= levels[nextABRAutoLevel].loadError
       ) {
         return forcedAutoLevel;
       }
-    }
-    // if forced auto level has been defined, use it to cap ABR computed quality level
-    if (forcedAutoLevel !== -1) {
-      nextABRAutoLevel = Math.min(forcedAutoLevel, nextABRAutoLevel);
     }
 
     // save result until state has changed
@@ -495,27 +534,23 @@ class AbrController implements AbrComponentAPI {
   }
 
   private getAutoLevelKey(): string {
-    return `${this.getBwEstimate()}_${this.hls.mainForwardBufferInfo?.len}`;
+    return `${this.getBwEstimate()}_${this.getStarvationDelay().toFixed(2)}`;
   }
 
   private getNextABRAutoLevel(): number {
     const { fragCurrent, partCurrent, hls } = this;
-    const { maxAutoLevel, config, minAutoLevel, media } = hls;
+    if (hls.levels.length <= 1) {
+      return hls.loadLevel;
+    }
+    const { maxAutoLevel, config, minAutoLevel } = hls;
     const currentFragDuration = partCurrent
       ? partCurrent.duration
       : fragCurrent
         ? fragCurrent.duration
         : 0;
-
-    // playbackRate is the absolute value of the playback rate; if media.playbackRate is 0, we use 1 to load as
-    // if we're playing back at the normal rate.
-    const playbackRate =
-      media && media.playbackRate !== 0 ? Math.abs(media.playbackRate) : 1.0;
     const avgbw = this.getBwEstimate();
     // bufferStarvationDelay is the wall-clock time left until the playback buffer is exhausted.
-    const bufferInfo = hls.mainForwardBufferInfo;
-    const bufferStarvationDelay =
-      (bufferInfo ? bufferInfo.len : 0) / playbackRate;
+    const bufferStarvationDelay = this.getStarvationDelay();
 
     let bwFactor = config.abrBandWidthFactor;
     let bwUpFactor = config.abrBandWidthUpFactor;
@@ -553,8 +588,8 @@ class AbrController implements AbrComponentAPI {
           ? Math.min(currentFragDuration, config.maxLoadingDelay)
           : config.maxLoadingDelay;
         maxStarvationDelay = maxLoadingDelay - bitrateTestDelay;
-        logger.info(
-          `[abr] bitrate test took ${Math.round(
+        this.info(
+          `bitrate test took ${Math.round(
             1000 * bitrateTestDelay,
           )}ms, set first fragment max fetchDuration to ${Math.round(
             1000 * maxStarvationDelay,
@@ -573,8 +608,8 @@ class AbrController implements AbrComponentAPI {
       bwFactor,
       bwUpFactor,
     );
-    logger.info(
-      `[abr] ${
+    this.info(
+      `${
         bufferStarvationDelay ? 'rebuffering expected' : 'buffer is empty'
       }, optimal quality level ${bestLevel}`,
     );
@@ -589,6 +624,20 @@ class AbrController implements AbrComponentAPI {
     }
     // or if bitrate is not lower, continue to use loadLevel
     return hls.loadLevel;
+  }
+
+  private getStarvationDelay(): number {
+    const hls = this.hls;
+    const media = hls.media;
+    if (!media) {
+      return Infinity;
+    }
+    // playbackRate is the absolute value of the playback rate; if media.playbackRate is 0, we use 1 to load as
+    // if we're playing back at the normal rate.
+    const playbackRate =
+      media && media.playbackRate !== 0 ? Math.abs(media.playbackRate) : 1.0;
+    const bufferInfo = hls.mainForwardBufferInfo;
+    return (bufferInfo ? bufferInfo.len : 0) / playbackRate;
   }
 
   private getBwEstimate(): number {
@@ -611,7 +660,7 @@ class AbrController implements AbrComponentAPI {
     const selectionBaseLevel =
       lastLoadedFragLevel === -1 ? this.hls.firstLevel : lastLoadedFragLevel;
     const { fragCurrent, partCurrent } = this;
-    const { levels, allAudioTracks, loadLevel } = this.hls;
+    const { levels, allAudioTracks, loadLevel, config } = this.hls;
     if (levels.length === 1) {
       return 0;
     }
@@ -621,10 +670,16 @@ class AbrController implements AbrComponentAPI {
     let currentCodecSet: string | undefined;
     let currentVideoRange: VideoRange | undefined = 'SDR';
     let currentFrameRate = level?.frameRate || 0;
+
+    const { audioPreference, videoPreference } = config;
     const audioTracksByGroup =
       this.audioTracksByGroup ||
       (this.audioTracksByGroup = getAudioTracksByGroup(allAudioTracks));
+    let minStartIndex = -1;
     if (firstSelection) {
+      if (this.firstSelection !== -1) {
+        return this.firstSelection;
+      }
       const codecTiers =
         this.codecTiers ||
         (this.codecTiers = getCodecTiers(
@@ -633,12 +688,29 @@ class AbrController implements AbrComponentAPI {
           minAutoLevel,
           maxAutoLevel,
         ));
-      const { codecSet, videoRange, minFramerate, minBitrate } =
-        getStartCodecTier(codecTiers, currentVideoRange, currentBw);
+      const startTier = getStartCodecTier(
+        codecTiers,
+        currentVideoRange,
+        currentBw,
+        audioPreference,
+        videoPreference,
+      );
+      const {
+        codecSet,
+        videoRanges,
+        minFramerate,
+        minBitrate,
+        minIndex,
+        preferHDR,
+      } = startTier;
+      minStartIndex = minIndex;
       currentCodecSet = codecSet;
-      currentVideoRange = videoRange;
+      currentVideoRange = preferHDR
+        ? videoRanges[videoRanges.length - 1]
+        : videoRanges[0];
       currentFrameRate = minFramerate;
       currentBw = Math.max(currentBw, minBitrate);
+      this.log(`picked start tier ${JSON.stringify(startTier)}`);
     } else {
       currentCodecSet = level?.codecSet;
       currentVideoRange = level?.videoRange;
@@ -660,19 +732,22 @@ class AbrController implements AbrComponentAPI {
       }
       if (
         __USE_MEDIA_CAPABILITIES__ &&
-        this.hls.config.useMediaCapabilities &&
+        config.useMediaCapabilities &&
         !levelInfo.supportedResult &&
         !levelInfo.supportedPromise
       ) {
-        const mediaCapabilities = navigator.mediaCapabilities;
+        const mediaCapabilities = navigator.mediaCapabilities as
+          | MediaCapabilities
+          | undefined;
         if (
+          typeof mediaCapabilities?.decodingInfo === 'function' &&
           requiresMediaCapabilitiesDecodingInfo(
             levelInfo,
             audioTracksByGroup,
-            mediaCapabilities,
             currentVideoRange,
             currentFrameRate,
             currentBw,
+            audioPreference,
           )
         ) {
           levelInfo.supportedPromise = getMediaDecodingInfoPromise(
@@ -681,21 +756,27 @@ class AbrController implements AbrComponentAPI {
             mediaCapabilities,
           );
           levelInfo.supportedPromise.then((decodingInfo) => {
+            if (!this.hls) {
+              return;
+            }
             levelInfo.supportedResult = decodingInfo;
+            const levels = this.hls.levels;
+            const index = levels.indexOf(levelInfo);
             if (decodingInfo.error) {
-              logger.warn(
-                `[abr] MediaCapabilities decodingInfo error: "${
+              this.warn(
+                `MediaCapabilities decodingInfo error: "${
                   decodingInfo.error
-                }" for level ${i} ${JSON.stringify(decodingInfo)}`,
+                }" for level ${index} ${JSON.stringify(decodingInfo)}`,
               );
             } else if (!decodingInfo.supported) {
-              logger.warn(
-                `[abr] Removing unsupported level ${i} after MediaCapabilities decodingInfo check failed ${JSON.stringify(
+              this.warn(
+                `Unsupported MediaCapabilities decodingInfo result for level ${index} ${JSON.stringify(
                   decodingInfo,
                 )}`,
               );
-              if (i > 0) {
-                this.hls.removeLevel(i);
+              if (index > -1 && levels.length > 1) {
+                this.log(`Removing unsupported level ${index}`);
+                this.hls.removeLevel(index);
               }
             }
           });
@@ -713,10 +794,13 @@ class AbrController implements AbrComponentAPI {
         (!upSwitch &&
           currentFrameRate > 0 &&
           currentFrameRate < levelInfo.frameRate) ||
-        !levelInfo.supportedResult?.decodingInfoResults?.[0].smooth
+        (levelInfo.supportedResult &&
+          !levelInfo.supportedResult.decodingInfoResults?.[0].smooth)
       ) {
-        levelsSkipped.push(i);
-        continue;
+        if (!firstSelection || i !== minStartIndex) {
+          levelsSkipped.push(i);
+          continue;
+        }
       }
 
       const levelDetails = levelInfo.details;
@@ -766,10 +850,14 @@ class AbrController implements AbrComponentAPI {
           (live && !this.bitrateTestDelay) ||
           fetchDuration < maxFetchDuration);
       if (canSwitchWithinTolerance) {
-        if (i !== loadLevel) {
+        const forcedAutoLevel = this.forcedAutoLevel;
+        if (
+          i !== loadLevel &&
+          (forcedAutoLevel === -1 || forcedAutoLevel !== loadLevel)
+        ) {
           if (levelsSkipped.length) {
-            logger.trace(
-              `[abr] Skipped level(s) ${levelsSkipped.join(
+            this.trace(
+              `Skipped level(s) ${levelsSkipped.join(
                 ',',
               )} of ${maxAutoLevel} max with CODECS and VIDEO-RANGE:"${
                 levels[levelsSkipped[0]].codecs
@@ -778,8 +866,8 @@ class AbrController implements AbrComponentAPI {
               }" ${currentVideoRange}`,
             );
           }
-          logger.info(
-            `[abr] switch candidate:${selectionBaseLevel}->${i} adjustedbw(${Math.round(
+          this.info(
+            `switch candidate:${selectionBaseLevel}->${i} adjustedbw(${Math.round(
               adjustedbw,
             )})-bitrate=${Math.round(
               adjustedbw - bitrate,
@@ -791,8 +879,11 @@ class AbrController implements AbrComponentAPI {
               1,
             )} fetchDuration:${fetchDuration.toFixed(
               1,
-            )} firstSelection:${firstSelection} codecSet:${currentCodecSet} videoRange:${currentVideoRange} hls.loadLevel:${loadLevel}`,
+            )} firstSelection:${firstSelection} codecSet:${levelInfo.codecSet} videoRange:${levelInfo.videoRange} hls.loadLevel:${loadLevel}`,
           );
+        }
+        if (firstSelection) {
+          this.firstSelection = i;
         }
         // as we are looping from highest to lowest, this will return the best achievable quality level
         return i;
@@ -802,9 +893,10 @@ class AbrController implements AbrComponentAPI {
     return -1;
   }
 
-  set nextAutoLevel(nextLevel: number) {
-    const value = Math.max(this.hls.minAutoLevel, nextLevel);
-    if (this._nextAutoLevel != value) {
+  public set nextAutoLevel(nextLevel: number) {
+    const { maxAutoLevel, minAutoLevel } = this.hls;
+    const value = Math.min(Math.max(nextLevel, minAutoLevel), maxAutoLevel);
+    if (this._nextAutoLevel !== value) {
       this.nextAutoLevelKey = '';
       this._nextAutoLevel = value;
     }

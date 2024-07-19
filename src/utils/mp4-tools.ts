@@ -1,6 +1,6 @@
 import { ElementaryStreamTypes } from '../loader/fragment';
 import { sliceUint8 } from './typed-array';
-import { utf8ArrayToStr } from '../demux/id3';
+import { utf8ArrayToStr } from '@svta/common-media-library/utils/utf8ArrayToStr';
 import { logger } from '../utils/logger';
 import Hex from './hex';
 import type { PassthroughTrack, UserdataSample } from '../types/demuxer';
@@ -36,6 +36,13 @@ export function readUint16(buffer: Uint8Array, offset: number): number {
 export function readUint32(buffer: Uint8Array, offset: number): number {
   const val = readSint32(buffer, offset);
   return val < 0 ? 4294967296 + val : val;
+}
+
+export function readUint64(buffer: Uint8Array, offset: number) {
+  let result = readUint32(buffer, offset);
+  result *= Math.pow(2, 32);
+  result += readUint32(buffer, offset + 4);
+  return result;
 }
 
 export function readSint32(buffer: Uint8Array, offset: number): number {
@@ -125,14 +132,16 @@ export function parseSegmentIndex(sidx: Uint8Array): SidxInfo | null {
   const timescale = readUint32(sidx, index);
   index += 4;
 
-  // TODO: parse earliestPresentationTime and firstOffset
-  // usually zero in our case
-  const earliestPresentationTime = 0;
-  const firstOffset = 0;
+  let earliestPresentationTime = 0;
+  let firstOffset = 0;
 
   if (version === 0) {
+    earliestPresentationTime = readUint32(sidx, index);
+    firstOffset = readUint32(sidx, index + 4);
     index += 8;
   } else {
+    earliestPresentationTime = readUint64(sidx, index);
+    firstOffset = readUint64(sidx, index + 8);
     index += 16;
   }
 
@@ -309,20 +318,57 @@ function parseStsd(stsd: Uint8Array): { codec: string; encrypted: boolean } {
     case 'avc1':
     case 'avc2':
     case 'avc3':
-    case 'avc4':
-      // profile + compatibility + level
-      codec += '.' + toHex(stsd[111]) + toHex(stsd[112]) + toHex(stsd[113]);
+    case 'avc4': {
+      // extract profile + compatibility + level out of avcC box
+      const avcCBox = findBox(sampleEntriesEnd, ['avcC'])[0];
+      codec += '.' + toHex(avcCBox[1]) + toHex(avcCBox[2]) + toHex(avcCBox[3]);
       break;
+    }
     case 'mp4a': {
       const codecBox = findBox(sampleEntries, [fourCC])[0];
       const esdsBox = findBox(codecBox.subarray(28), ['esds'])[0];
-      if (esdsBox && esdsBox.length > 12 && esdsBox[11] !== 0) {
-        codec += '.' + toHex(esdsBox[11]);
-        codec += '.' + ((esdsBox[12] >>> 2) & 0x3f).toString(16).toUpperCase();
+      if (esdsBox && esdsBox.length > 7) {
+        let i = 4;
+        // ES Descriptor tag
+        if (esdsBox[i++] !== 0x03) {
+          break;
+        }
+        i = skipBERInteger(esdsBox, i);
+        i += 2; // skip es_id;
+        const flags = esdsBox[i++];
+        if (flags & 0x80) {
+          i += 2; // skip dependency es_id
+        }
+        if (flags & 0x40) {
+          i += esdsBox[i++]; // skip URL
+        }
+        // Decoder config descriptor
+        if (esdsBox[i++] !== 0x04) {
+          break;
+        }
+        i = skipBERInteger(esdsBox, i);
+        const objectType = esdsBox[i++];
+        if (objectType === 0x40) {
+          codec += '.' + toHex(objectType);
+        } else {
+          break;
+        }
+        i += 12;
+        // Decoder specific info
+        if (esdsBox[i++] !== 0x05) {
+          break;
+        }
+        i = skipBERInteger(esdsBox, i);
+        const firstByte = esdsBox[i++];
+        let audioObjectType = (firstByte & 0xf8) >> 3;
+        if (audioObjectType === 31) {
+          audioObjectType +=
+            1 + ((firstByte & 0x7) << 3) + ((esdsBox[i] & 0xe0) >> 5);
+        }
+        codec += '.' + audioObjectType;
       }
       break;
     }
-    // break;
     case 'hvc1':
     case 'hev1': {
       const hvcCBox = findBox(sampleEntriesEnd, ['hvcC'])[0];
@@ -428,6 +474,14 @@ function parseStsd(stsd: Uint8Array): { codec: string; encrypted: boolean } {
       break;
   }
   return { codec, encrypted };
+}
+
+function skipBERInteger(bytes: Uint8Array, i: number): number {
+  const limit = i + 5;
+  while (bytes[i++] & 0x80 && i < limit) {
+    /* do nothing */
+  }
+  return i;
 }
 
 function toHex(x: number): string {
@@ -548,7 +602,7 @@ export function getStartDTS(
             // convert base time to seconds
             const startTime = baseTime / scale;
             if (
-              isFinite(startTime) &&
+              Number.isFinite(startTime) &&
               (result === null || startTime < result)
             ) {
               return startTime;
@@ -560,7 +614,7 @@ export function getStartDTS(
       );
       if (
         start !== null &&
-        isFinite(start) &&
+        Number.isFinite(start) &&
         (result === null || start < result)
       ) {
         return start;
@@ -634,19 +688,31 @@ export function getDuration(data: Uint8Array, initData: InitData) {
   }
   if (videoDuration === 0 && audioDuration === 0) {
     // If duration samples are not available in the traf use sidx subsegment_duration
+    let sidxMinStart = Infinity;
+    let sidxMaxEnd = 0;
     let sidxDuration = 0;
     const sidxs = findBox(data, ['sidx']);
     for (let i = 0; i < sidxs.length; i++) {
       const sidx = parseSegmentIndex(sidxs[i]);
       if (sidx?.references) {
-        sidxDuration += sidx.references.reduce(
+        sidxMinStart = Math.min(
+          sidxMinStart,
+          sidx.earliestPresentationTime / sidx.timescale,
+        );
+        const subSegmentDuration = sidx.references.reduce(
           (dur, ref) => dur + ref.info.duration || 0,
           0,
         );
+        sidxMaxEnd = Math.max(
+          sidxMaxEnd,
+          subSegmentDuration + sidx.earliestPresentationTime / sidx.timescale,
+        );
+        sidxDuration = sidxMaxEnd - sidxMinStart;
       }
     }
-
-    return sidxDuration;
+    if (sidxDuration && Number.isFinite(sidxDuration)) {
+      return sidxDuration;
+    }
   }
   if (videoDuration) {
     return videoDuration;
@@ -986,7 +1052,6 @@ export function parseSEIMessageFromNALu(
   let b = 0;
 
   while (seiPtr < data.length) {
-    // payloadType is a uint8, so we need to mask it when extracting it and the pyloadSize
     payloadType = 0;
     do {
       if (seiPtr >= data.length) {
@@ -994,7 +1059,6 @@ export function parseSEIMessageFromNALu(
       }
       b = data[seiPtr++];
       payloadType += b;
-      payloadType &= 0xff;
     } while (b === 0xff);
 
     // Parse payload size.
@@ -1005,7 +1069,6 @@ export function parseSEIMessageFromNALu(
       }
       b = data[seiPtr++];
       payloadSize += b;
-      payloadSize &= 0xff;
     } while (b === 0xff);
 
     const leftOver = data.length - seiPtr;
@@ -1018,8 +1081,9 @@ export function parseSEIMessageFromNALu(
     } else if (payloadSize > leftOver) {
       // Some type of corruption has happened?
       logger.error(
-        `SEI payload of ${payloadSize} is too small, only ${leftOver} bytes left.`,
+        `Malformed SEI payload. ${payloadSize} is too small, only ${leftOver} bytes left to parse.`,
       );
+      // We might be able to parse some data, but let's be safe and ignore it.
       break;
     }
 

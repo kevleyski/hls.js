@@ -147,12 +147,15 @@ function getCodecCompatibleNameLower(
     return CODEC_COMPATIBLE_NAMES[lowerCaseCodec]!;
   }
 
-  // Idealy fLaC and Opus would be first (spec-compliant) but
-  // some browsers will report that fLaC is supported then fail.
-  // see: https://bugs.chromium.org/p/chromium/issues/detail?id=1422728
   const codecsToCheck = {
+    // Idealy fLaC and Opus would be first (spec-compliant) but
+    // some browsers will report that fLaC is supported then fail.
+    // see: https://bugs.chromium.org/p/chromium/issues/detail?id=1422728
     flac: ['flac', 'fLaC', 'FLAC'],
     opus: ['opus', 'Opus'],
+    // Replace audio codec info if browser does not support mp4a.40.34,
+    // and demuxer can fallback to 'audio/mpeg' or 'audio/mp4;codecs="mp3"'
+    'mp4a.40.34': ['mp3'],
   }[lowerCaseCodec];
 
   for (let i = 0; i < codecsToCheck.length; i++) {
@@ -165,13 +168,18 @@ function getCodecCompatibleNameLower(
     ) {
       CODEC_COMPATIBLE_NAMES[lowerCaseCodec] = codecsToCheck[i];
       return codecsToCheck[i];
+    } else if (
+      codecsToCheck[i] === 'mp3' &&
+      getMediaSource(preferManagedMediaSource)?.isTypeSupported('audio/mpeg')
+    ) {
+      return '';
     }
   }
 
   return lowerCaseCodec;
 }
 
-const AUDIO_CODEC_REGEXP = /flac|opus/i;
+const AUDIO_CODEC_REGEXP = /flac|opus|mp4a\.40\.34/i;
 export function getCodecCompatibleName(
   codec: string,
   preferManagedMediaSource = true,
@@ -185,7 +193,7 @@ export function getCodecCompatibleName(
 }
 
 export function pickMostCompleteCodecName(
-  parsedCodec: string,
+  parsedCodec: string | undefined,
   levelCodec: string | undefined,
 ): string | undefined {
   // Parsing of mp4a codecs strings in mp4-tools from media is incomplete as of d8c6c7a
@@ -193,19 +201,44 @@ export function pickMostCompleteCodecName(
   if (parsedCodec && parsedCodec !== 'mp4a') {
     return parsedCodec;
   }
-  return levelCodec;
+  return levelCodec ? levelCodec.split(',')[0] : levelCodec;
 }
 
 export function convertAVC1ToAVCOTI(codec: string) {
   // Convert avc1 codec string from RFC-4281 to RFC-6381 for MediaSource.isTypeSupported
-  const avcdata = codec.split('.');
-  if (avcdata.length > 2) {
-    let result = avcdata.shift() + '.';
-    result += parseInt(avcdata.shift() as string).toString(16);
-    result += ('000' + parseInt(avcdata.shift() as string).toString(16)).slice(
-      -4,
-    );
-    return result;
+  // Examples: avc1.66.30 to avc1.42001e and avc1.77.30,avc1.66.30 to avc1.4d001e,avc1.42001e.
+  const codecs = codec.split(',');
+  for (let i = 0; i < codecs.length; i++) {
+    const avcdata = codecs[i].split('.');
+    if (avcdata.length > 2) {
+      let result = avcdata.shift() + '.';
+      result += parseInt(avcdata.shift() as string).toString(16);
+      result += (
+        '000' + parseInt(avcdata.shift() as string).toString(16)
+      ).slice(-4);
+      codecs[i] = result;
+    }
   }
-  return codec;
+  return codecs.join(',');
+}
+
+export interface TypeSupported {
+  mpeg: boolean;
+  mp3: boolean;
+  ac3: boolean;
+}
+
+export function getM2TSSupportedAudioTypes(
+  preferManagedMediaSource: boolean,
+): TypeSupported {
+  const MediaSource = getMediaSource(preferManagedMediaSource) || {
+    isTypeSupported: () => false,
+  };
+  return {
+    mpeg: MediaSource.isTypeSupported('audio/mpeg'),
+    mp3: MediaSource.isTypeSupported('audio/mp4; codecs="mp3"'),
+    ac3: __USE_M2TS_ADVANCED_CODECS__
+      ? MediaSource.isTypeSupported('audio/mp4; codecs="ac-3"')
+      : false,
+  };
 }

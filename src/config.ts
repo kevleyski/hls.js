@@ -17,10 +17,10 @@ import XhrLoader from './utils/xhr-loader';
 import FetchLoader, { fetchSupported } from './utils/fetch-loader';
 import Cues from './utils/cues';
 import { requestMediaKeySystemAccess } from './utils/mediakeys-helper';
-import { ILogger, logger } from './utils/logger';
 
 import type Hls from './hls';
 import type { CuesInterface } from './utils/cues';
+import type { ILogger } from './utils/logger';
 import type { MediaKeyFunc, KeySystems } from './utils/mediakeys-helper';
 import type {
   FragmentLoaderContext,
@@ -29,6 +29,11 @@ import type {
   LoaderResponse,
   PlaylistLoaderContext,
 } from './types/loader';
+import type {
+  AudioSelectionOption,
+  SubtitleSelectionOption,
+  VideoSelectionOption,
+} from './types/media-playlist';
 
 export type ABRControllerConfig = {
   abrEwmaFastLive: number;
@@ -218,12 +223,19 @@ export type StreamControllerConfig = {
   testBandwidth: boolean;
 };
 
+export type SelectionPreferences = {
+  videoPreference?: VideoSelectionOption;
+  audioPreference?: AudioSelectionOption;
+  subtitlePreference?: SubtitleSelectionOption;
+};
+
 export type LatencyControllerConfig = {
   liveSyncDurationCount: number;
   liveMaxLatencyDurationCount: number;
   liveSyncDuration?: number;
   liveMaxLatencyDuration?: number;
   maxLiveSyncPlaybackRate: number;
+  liveSyncOnStallIncrease: number;
 };
 
 export type MetadataControllerConfig = {
@@ -299,6 +311,7 @@ export type HlsConfig = {
   LevelControllerConfig &
   MP4RemuxerConfig &
   StreamControllerConfig &
+  SelectionPreferences &
   LatencyControllerConfig &
   MetadataControllerConfig &
   TimelineControllerConfig &
@@ -340,6 +353,7 @@ export const hlsDefaultConfig: HlsConfig = {
   nudgeMaxRetry: 3, // used by stream-controller
   maxFragLookUpTolerance: 0.25, // used by stream-controller
   liveSyncDurationCount: 3, // used by latency-controller
+  liveSyncOnStallIncrease: 1, // used by latency-controller
   liveMaxLatencyDurationCount: Infinity, // used by latency-controller
   liveSyncDuration: undefined, // used by latency-controller
   liveMaxLatencyDuration: undefined, // used by latency-controller
@@ -546,6 +560,7 @@ function timelineConfig(): TimelineControllerConfig {
 export function mergeConfig(
   defaultConfig: HlsConfig,
   userConfig: Partial<HlsConfig>,
+  logger: ILogger,
 ): HlsConfig {
   if (
     (userConfig.liveSyncDurationCount ||
@@ -652,7 +667,7 @@ function deepCpy(obj: any): any {
 /**
  * @ignore
  */
-export function enableStreamingMode(config) {
+export function enableStreamingMode(config: HlsConfig, logger: ILogger) {
   const currentLoader = config.loader;
   if (currentLoader !== FetchLoader && currentLoader !== XhrLoader) {
     // If a developer has configured their own loader, respect that choice

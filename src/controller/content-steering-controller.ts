@@ -3,16 +3,7 @@ import { Level } from '../types/level';
 import { reassignFragmentLevelIndexes } from '../utils/level-helper';
 import { AttrList } from '../utils/attr-list';
 import { ErrorActionFlags, NetworkErrorAction } from './error-controller';
-import { logger } from '../utils/logger';
-import type Hls from '../hls';
-import type { NetworkComponentAPI } from '../types/component-api';
-import type {
-  SteeringManifestLoadedData,
-  ErrorData,
-  ManifestLoadedData,
-  ManifestParsedData,
-} from '../types/events';
-import type { RetryConfig } from '../config';
+import { Logger } from '../utils/logger';
 import {
   PlaylistContextType,
   type Loader,
@@ -22,7 +13,16 @@ import {
   type LoaderResponse,
   type LoaderStats,
 } from '../types/loader';
-import type { LevelParsed } from '../types/level';
+import type Hls from '../hls';
+import type { NetworkComponentAPI } from '../types/component-api';
+import type {
+  SteeringManifestLoadedData,
+  ErrorData,
+  ManifestLoadedData,
+  ManifestParsedData,
+} from '../types/events';
+import type { RetryConfig } from '../config';
+
 import type { MediaAttributes, MediaPlaylist } from '../types/media-playlist';
 
 export type SteeringManifest = {
@@ -48,13 +48,15 @@ export type UriReplacement = {
 
 const PATHWAY_PENALTY_DURATION_MS = 300000;
 
-export default class ContentSteeringController implements NetworkComponentAPI {
+export default class ContentSteeringController
+  extends Logger
+  implements NetworkComponentAPI
+{
   private readonly hls: Hls;
-  private log: (msg: any) => void;
   private loader: Loader<LoaderContext> | null = null;
   private uri: string | null = null;
   private pathwayId: string = '.';
-  private pathwayPriority: string[] | null = null;
+  private _pathwayPriority: string[] | null = null;
   private timeToLoad: number = 300;
   private reloadTimer: number = -1;
   private updated: number = 0;
@@ -66,8 +68,8 @@ export default class ContentSteeringController implements NetworkComponentAPI {
   private penalizedPathways: { [pathwayId: string]: number } = {};
 
   constructor(hls: Hls) {
+    super('content-steering', hls.logger);
     this.hls = hls;
-    this.log = logger.log.bind(logger, `[content-steering]:`);
     this.registerListeners();
   }
 
@@ -88,6 +90,23 @@ export default class ContentSteeringController implements NetworkComponentAPI {
     hls.off(Events.MANIFEST_LOADED, this.onManifestLoaded, this);
     hls.off(Events.MANIFEST_PARSED, this.onManifestParsed, this);
     hls.off(Events.ERROR, this.onError, this);
+  }
+
+  pathways() {
+    return (this.levels || []).reduce((pathways, level) => {
+      if (pathways.indexOf(level.pathwayId) === -1) {
+        pathways.push(level.pathwayId);
+      }
+      return pathways;
+    }, [] as string[]);
+  }
+
+  get pathwayPriority(): string[] | null {
+    return this._pathwayPriority;
+  }
+
+  set pathwayPriority(pathwayPriority: string[]) {
+    this.updatePathwayPriority(pathwayPriority);
   }
 
   startLoad() {
@@ -176,7 +195,7 @@ export default class ContentSteeringController implements NetworkComponentAPI {
       errorAction.flags === ErrorActionFlags.MoveAllAlternatesMatchingHost
     ) {
       const levels = this.levels;
-      let pathwayPriority = this.pathwayPriority;
+      let pathwayPriority = this._pathwayPriority;
       let errorPathway = this.pathwayId;
       if (data.context) {
         const { groupId, pathwayId, type } = data.context;
@@ -191,19 +210,14 @@ export default class ContentSteeringController implements NetworkComponentAPI {
       }
       if (!pathwayPriority && levels) {
         // If PATHWAY-PRIORITY was not provided, list pathways for error handling
-        pathwayPriority = levels.reduce((pathways, level) => {
-          if (pathways.indexOf(level.pathwayId) === -1) {
-            pathways.push(level.pathwayId);
-          }
-          return pathways;
-        }, [] as string[]);
+        pathwayPriority = this.pathways();
       }
       if (pathwayPriority && pathwayPriority.length > 1) {
         this.updatePathwayPriority(pathwayPriority);
         errorAction.resolved = this.pathwayId !== errorPathway;
       }
       if (!errorAction.resolved) {
-        logger.warn(
+        this.warn(
           `Could not resolve ${data.details} ("${
             data.error.message
           }") with content-steering for Pathway: ${errorPathway} levels: ${
@@ -245,7 +259,7 @@ export default class ContentSteeringController implements NetworkComponentAPI {
   }
 
   private updatePathwayPriority(pathwayPriority: string[]) {
-    this.pathwayPriority = pathwayPriority;
+    this._pathwayPriority = pathwayPriority;
     let levels: Level[] | undefined;
 
     // Evaluate if we should remove the pathway from the penalized list
@@ -330,14 +344,6 @@ export default class ContentSteeringController implements NetworkComponentAPI {
       }
       const clonedVariants = this.getLevelsForPathway(baseId).map(
         (baseLevel) => {
-          const levelParsed: LevelParsed = Object.assign({}, baseLevel as any);
-          levelParsed.details = undefined;
-          levelParsed.url = performUriReplacement(
-            baseLevel.uri,
-            baseLevel.attrs['STABLE-VARIANT-ID'],
-            'PER-VARIANT-URIS',
-            uriReplacement,
-          );
           const attributes = new AttrList(baseLevel.attrs);
           attributes['PATHWAY-ID'] = cloneId;
           const clonedAudioGroupId: string | undefined =
@@ -352,8 +358,22 @@ export default class ContentSteeringController implements NetworkComponentAPI {
             subtitleGroupCloneMap[attributes.SUBTITLES] = clonedSubtitleGroupId;
             attributes.SUBTITLES = clonedSubtitleGroupId;
           }
-          levelParsed.attrs = attributes;
-          const clonedLevel = new Level(levelParsed);
+          const url = performUriReplacement(
+            baseLevel.uri,
+            attributes['STABLE-VARIANT-ID'],
+            'PER-VARIANT-URIS',
+            uriReplacement,
+          );
+          const clonedLevel = new Level({
+            attrs: attributes,
+            audioCodec: baseLevel.audioCodec,
+            bitrate: baseLevel.bitrate,
+            height: baseLevel.height,
+            name: baseLevel.name,
+            url,
+            videoCodec: baseLevel.videoCodec,
+            width: baseLevel.width,
+          });
           if (baseLevel.audioGroups) {
             for (let i = 1; i < baseLevel.audioGroups.length; i++) {
               clonedLevel.addGroupId(
@@ -436,7 +456,7 @@ export default class ContentSteeringController implements NetworkComponentAPI {
       ) => {
         this.log(`Loaded steering manifest: "${url}"`);
         const steeringData = response.data as SteeringManifest;
-        if (steeringData.VERSION !== 1) {
+        if (steeringData?.VERSION !== 1) {
           this.log(`Steering VERSION ${steeringData.VERSION} not supported!`);
           return;
         }

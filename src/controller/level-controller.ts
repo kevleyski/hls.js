@@ -1,4 +1,4 @@
-import {
+import type {
   ManifestLoadedData,
   ManifestParsedData,
   LevelLoadedData,
@@ -27,8 +27,6 @@ import type Hls from '../hls';
 import type { HlsUrlParameters, LevelParsed } from '../types/level';
 import type { MediaPlaylist } from '../types/media-playlist';
 
-let chromeOrFirefox: boolean;
-
 export default class LevelController extends BasePlaylistController {
   private _levels: Level[] = [];
   private _firstLevel: number = -1;
@@ -45,7 +43,7 @@ export default class LevelController extends BasePlaylistController {
     hls: Hls,
     contentSteeringController: ContentSteeringController | null,
   ) {
-    super(hls, '[level-controller]');
+    super(hls, 'level-controller');
     this.steering = contentSteeringController;
     this._registerListeners();
   }
@@ -119,22 +117,12 @@ export default class LevelController extends BasePlaylistController {
 
     data.levels.forEach((levelParsed: LevelParsed) => {
       const attributes = levelParsed.attrs;
-
-      // erase audio codec info if browser does not support mp4a.40.34.
-      // demuxer will autodetect codec and fallback to mpeg/audio
       let { audioCodec, videoCodec } = levelParsed;
-      if (audioCodec?.indexOf('mp4a.40.34') !== -1) {
-        chromeOrFirefox ||= /chrome|firefox/i.test(navigator.userAgent);
-        if (chromeOrFirefox) {
-          levelParsed.audioCodec = audioCodec = undefined;
-        }
-      }
-
       if (audioCodec) {
-        levelParsed.audioCodec = audioCodec = getCodecCompatibleName(
-          audioCodec,
-          preferManagedMediaSource,
-        );
+        // Returns empty and set to undefined for 'mp4a.40.34' with fallback to 'audio/mpeg' SourceBuffer
+        levelParsed.audioCodec = audioCodec =
+          getCodecCompatibleName(audioCodec, preferManagedMediaSource) ||
+          undefined;
       }
 
       if (videoCodec?.indexOf('avc1') === 0) {
@@ -307,8 +295,8 @@ export default class LevelController extends BasePlaylistController {
           return valueB - valueA;
         }
       }
-      if (a.bitrate !== b.bitrate) {
-        return a.bitrate - b.bitrate;
+      if (a.averageBitrate !== b.averageBitrate) {
+        return a.averageBitrate - b.averageBitrate;
       }
       return 0;
     });
@@ -473,7 +461,11 @@ export default class LevelController extends BasePlaylistController {
     const levelDetails = level.details;
     if (!levelDetails || levelDetails.live) {
       // level not retrieved yet, or live playlist we need to (re)load it
-      const hlsUrlParameters = this.switchParams(level.uri, lastLevel?.details);
+      const hlsUrlParameters = this.switchParams(
+        level.uri,
+        lastLevel?.details,
+        levelDetails,
+      );
       this.loadPlaylist(hlsUrlParameters);
     }
   }
@@ -515,6 +507,30 @@ export default class LevelController extends BasePlaylistController {
 
   set startLevel(newLevel: number) {
     this._startLevel = newLevel;
+  }
+
+  get pathwayPriority(): string[] | null {
+    if (this.steering) {
+      return this.steering.pathwayPriority;
+    }
+
+    return null;
+  }
+
+  set pathwayPriority(pathwayPriority: string[]) {
+    if (this.steering) {
+      const pathwaysList = this.steering.pathways();
+      const filteredPathwayPriority = pathwayPriority.filter((pathwayId) => {
+        return pathwaysList.indexOf(pathwayId) !== -1;
+      });
+      if (pathwayPriority.length < 1) {
+        this.warn(
+          `pathwayPriority ${pathwayPriority} should contain at least one pathway from list: ${pathwaysList}`,
+        );
+        return;
+      }
+      this.steering.pathwayPriority = filteredPathwayPriority;
+    }
   }
 
   protected onError(event: Events.ERROR, data: ErrorData) {
@@ -568,7 +584,13 @@ export default class LevelController extends BasePlaylistController {
       if (curLevel.fragmentError === 0) {
         curLevel.loadError = 0;
       }
-      this.playlistLoaded(level, data, curLevel.details);
+      // Ignore matching details populated by loading a Media Playlist directly
+      let previousDetails = curLevel.details;
+      if (previousDetails === data.details && previousDetails.advanced) {
+        previousDetails = undefined;
+      }
+
+      this.playlistLoaded(level, data, previousDetails);
     } else if (data.deliveryDirectives?.skip) {
       // received a delta playlist update that cannot be merged
       details.deltaUpdateFailed = true;

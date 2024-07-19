@@ -4,21 +4,24 @@ import {
   clearCurrentCues,
   removeCuesInRange,
 } from '../utils/texttrack-utils';
-import * as ID3 from '../demux/id3';
 import {
   DateRange,
   isDateRangeCueAttribute,
   isSCTE35Attribute,
 } from '../loader/date-range';
+import { LevelDetails } from '../loader/level-details';
 import { MetadataSchema } from '../types/demuxer';
 import type {
   BufferFlushingData,
   FragParsingMetadataData,
+  LevelPTSUpdatedData,
   LevelUpdatedData,
   MediaAttachedData,
 } from '../types/events';
 import type { ComponentAPI } from '../types/component-api';
 import type Hls from '../hls';
+import { getId3Frames } from '@svta/common-media-library/id3/getId3Frames';
+import { isId3TimestampFrame } from '@svta/common-media-library/id3/isId3TimestampFrame';
 
 declare global {
   interface Window {
@@ -26,17 +29,34 @@ declare global {
   }
 }
 
-type Cue = VTTCue | TextTrackCue;
-
 const MIN_CUE_DURATION = 0.25;
 
-function getCueClass() {
+function getCueClass(): typeof VTTCue | typeof TextTrackCue | undefined {
   if (typeof self === 'undefined') return undefined;
+  return self.VTTCue || self.TextTrackCue;
+}
 
-  // Attempt to recreate Safari functionality by creating
-  // WebKitDataCue objects when available and store the decoded
-  // ID3 data in the value property of the cue
-  return (self.WebKitDataCue || self.VTTCue || self.TextTrackCue) as any;
+function createCueWithDataFields(
+  Cue: typeof VTTCue | typeof TextTrackCue,
+  startTime: number,
+  endTime: number,
+  data: Object,
+  type?: string,
+): VTTCue | TextTrackCue | undefined {
+  let cue = new Cue(startTime, endTime, '');
+  try {
+    (cue as any).value = data;
+    if (type) {
+      (cue as any).type = type;
+    }
+  } catch (e) {
+    cue = new Cue(
+      startTime,
+      endTime,
+      JSON.stringify(type ? { type, ...data } : data),
+    );
+  }
+  return cue;
 }
 
 // VTTCue latest draft allows an infinite duration, fallback
@@ -44,16 +64,12 @@ function getCueClass() {
 const MAX_CUE_ENDTIME = (() => {
   const Cue = getCueClass();
   try {
-    new Cue(0, Number.POSITIVE_INFINITY, '');
+    Cue && new Cue(0, Number.POSITIVE_INFINITY, '');
   } catch (e) {
     return Number.MAX_VALUE;
   }
   return Number.POSITIVE_INFINITY;
 })();
-
-function dateRangeDateToTimelineSeconds(date: Date, offset: number): number {
-  return date.getTime() / 1000 - offset;
-}
 
 function hexToArrayBuffer(str): ArrayBuffer {
   return Uint8Array.from(
@@ -70,7 +86,11 @@ class ID3TrackController implements ComponentAPI {
   private media: HTMLMediaElement | null = null;
   private dateRangeCuesAppended: Record<
     string,
-    { cues: Record<string, Cue>; dateRange: DateRange; durationKnown: boolean }
+    {
+      cues: Record<string, VTTCue | TextTrackCue>;
+      dateRange: DateRange;
+      durationKnown: boolean;
+    }
   > = {};
 
   constructor(hls) {
@@ -78,7 +98,7 @@ class ID3TrackController implements ComponentAPI {
     this._registerListeners();
   }
 
-  destroy() {
+  public destroy() {
     this._unregisterListeners();
     this.id3Track = null;
     this.media = null;
@@ -95,6 +115,7 @@ class ID3TrackController implements ComponentAPI {
     hls.on(Events.FRAG_PARSING_METADATA, this.onFragParsingMetadata, this);
     hls.on(Events.BUFFER_FLUSHING, this.onBufferFlushing, this);
     hls.on(Events.LEVEL_UPDATED, this.onLevelUpdated, this);
+    hls.on(Events.LEVEL_PTS_UPDATED, this.onLevelPtsUpdated, this);
   }
 
   private _unregisterListeners() {
@@ -105,22 +126,22 @@ class ID3TrackController implements ComponentAPI {
     hls.off(Events.FRAG_PARSING_METADATA, this.onFragParsingMetadata, this);
     hls.off(Events.BUFFER_FLUSHING, this.onBufferFlushing, this);
     hls.off(Events.LEVEL_UPDATED, this.onLevelUpdated, this);
+    hls.off(Events.LEVEL_PTS_UPDATED, this.onLevelPtsUpdated, this);
   }
 
   // Add ID3 metatadata text track.
-  protected onMediaAttached(
+  private onMediaAttached(
     event: Events.MEDIA_ATTACHED,
     data: MediaAttachedData,
   ): void {
     this.media = data.media;
   }
 
-  protected onMediaDetaching(): void {
-    if (!this.id3Track) {
-      return;
+  private onMediaDetaching(): void {
+    if (this.id3Track) {
+      clearCurrentCues(this.id3Track);
+      this.id3Track = null;
     }
-    clearCurrentCues(this.id3Track);
-    this.id3Track = null;
     this.media = null;
     this.dateRangeCuesAppended = {};
   }
@@ -129,13 +150,13 @@ class ID3TrackController implements ComponentAPI {
     this.dateRangeCuesAppended = {};
   }
 
-  createTrack(media: HTMLMediaElement): TextTrack {
+  private createTrack(media: HTMLMediaElement): TextTrack {
     const track = this.getID3Track(media.textTracks) as TextTrack;
     track.mode = 'hidden';
     return track;
   }
 
-  getID3Track(textTracks: TextTrackList): TextTrack | void {
+  private getID3Track(textTracks: TextTrackList): TextTrack | void {
     if (!this.media) {
       return;
     }
@@ -152,7 +173,7 @@ class ID3TrackController implements ComponentAPI {
     return this.media.addTextTrack('metadata', 'id3');
   }
 
-  onFragParsingMetadata(
+  private onFragParsingMetadata(
     event: Events.FRAG_PARSING_METADATA,
     data: FragParsingMetadataData,
   ) {
@@ -177,6 +198,9 @@ class ID3TrackController implements ComponentAPI {
     }
 
     const Cue = getCueClass();
+    if (!Cue) {
+      return;
+    }
 
     for (let i = 0; i < samples.length; i++) {
       const type = samples[i].type;
@@ -187,7 +211,7 @@ class ID3TrackController implements ComponentAPI {
         continue;
       }
 
-      const frames = ID3.getID3Frames(samples[i].data);
+      const frames = getId3Frames(samples[i].data);
       if (frames) {
         const startTime = samples[i].pts;
         let endTime: number = startTime + samples[i].duration;
@@ -204,23 +228,26 @@ class ID3TrackController implements ComponentAPI {
         for (let j = 0; j < frames.length; j++) {
           const frame = frames[j];
           // Safari doesn't put the timestamp frame in the TextTrack
-          if (!ID3.isTimeStampFrame(frame)) {
+          if (!isId3TimestampFrame(frame)) {
             // add a bounds to any unbounded cues
             this.updateId3CueEnds(startTime, type);
-
-            const cue = new Cue(startTime, endTime, '');
-            cue.value = frame;
-            if (type) {
-              cue.type = type;
+            const cue = createCueWithDataFields(
+              Cue,
+              startTime,
+              endTime,
+              frame,
+              type,
+            );
+            if (cue) {
+              this.id3Track.addCue(cue);
             }
-            this.id3Track.addCue(cue);
           }
         }
       }
     }
   }
 
-  updateId3CueEnds(startTime: number, type: MetadataSchema) {
+  private updateId3CueEnds(startTime: number, type: MetadataSchema) {
     const cues = this.id3Track?.cues;
     if (cues) {
       for (let i = cues.length; i--; ) {
@@ -236,7 +263,7 @@ class ID3TrackController implements ComponentAPI {
     }
   }
 
-  onBufferFlushing(
+  private onBufferFlushing(
     event: Events.BUFFER_FLUSHING,
     { startOffset, endOffset, type }: BufferFlushingData,
   ) {
@@ -268,7 +295,23 @@ class ID3TrackController implements ComponentAPI {
     }
   }
 
-  onLevelUpdated(event: Events.LEVEL_UPDATED, { details }: LevelUpdatedData) {
+  private onLevelUpdated(
+    event: Events.LEVEL_UPDATED,
+    { details }: LevelUpdatedData,
+  ) {
+    this.updateDateRangeCues(details, true);
+  }
+
+  private onLevelPtsUpdated(
+    event: Events.LEVEL_PTS_UPDATED,
+    data: LevelPTSUpdatedData,
+  ) {
+    if (Math.abs(data.drift) > 0.01) {
+      this.updateDateRangeCues(data.details);
+    }
+  }
+
+  private updateDateRangeCues(details: LevelDetails, removeOldCues?: true) {
     if (
       !this.media ||
       !details.hasProgramDateTime ||
@@ -280,7 +323,7 @@ class ID3TrackController implements ComponentAPI {
     const { dateRanges } = details;
     const ids = Object.keys(dateRanges);
     // Remove cues from track not found in details.dateRanges
-    if (id3Track) {
+    if (id3Track && removeOldCues) {
       const idsToRemove = Object.keys(dateRangeCuesAppended).filter(
         (id) => !ids.includes(id),
       );
@@ -302,72 +345,82 @@ class ID3TrackController implements ComponentAPI {
       this.id3Track = this.createTrack(this.media);
     }
 
-    const dateTimeOffset =
-      (lastFragment.programDateTime as number) / 1000 - lastFragment.start;
     const Cue = getCueClass();
-
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       const dateRange = dateRanges[id];
+      const startTime = dateRange.startTime;
+
+      // Process DateRanges to determine end-time (known DURATION, END-DATE, or END-ON-NEXT)
       const appendedDateRangeCues = dateRangeCuesAppended[id];
       const cues = appendedDateRangeCues?.cues || {};
       let durationKnown = appendedDateRangeCues?.durationKnown || false;
-      const startTime = dateRangeDateToTimelineSeconds(
-        dateRange.startDate,
-        dateTimeOffset,
-      );
       let endTime = MAX_CUE_ENDTIME;
-      const endDate = dateRange.endDate;
-      if (endDate) {
-        endTime = dateRangeDateToTimelineSeconds(endDate, dateTimeOffset);
+      const { duration, endDate } = dateRange;
+      if (endDate && duration !== null) {
+        endTime = startTime + duration;
         durationKnown = true;
       } else if (dateRange.endOnNext && !durationKnown) {
-        const nextDateRangeWithSameClass = ids
-          .reduce((filterMapArray, id) => {
-            const candidate = dateRanges[id];
-            if (
-              candidate.class === dateRange.class &&
-              candidate.id !== id &&
-              candidate.startDate > dateRange.startDate
-            ) {
-              filterMapArray.push(candidate);
+        const nextDateRangeWithSameClass = ids.reduce(
+          (candidateDateRange: DateRange | null, id) => {
+            if (id !== dateRange.id) {
+              const otherDateRange = dateRanges[id];
+              if (
+                otherDateRange.class === dateRange.class &&
+                otherDateRange.startDate > dateRange.startDate &&
+                (!candidateDateRange ||
+                  dateRange.startDate < candidateDateRange.startDate)
+              ) {
+                return otherDateRange;
+              }
             }
-            return filterMapArray;
-          }, [] as DateRange[])
-          .sort((a, b) => a.startDate.getTime() - b.startDate.getTime())[0];
+            return candidateDateRange;
+          },
+          null,
+        );
         if (nextDateRangeWithSameClass) {
-          endTime = dateRangeDateToTimelineSeconds(
-            nextDateRangeWithSameClass.startDate,
-            dateTimeOffset,
-          );
+          endTime = nextDateRangeWithSameClass.startTime;
           durationKnown = true;
         }
       }
 
+      // Create TextTrack Cues for each MetadataGroup Item (select DateRange attribute)
+      // This is to emulate Safari HLS playback handling of DateRange tags
       const attributes = Object.keys(dateRange.attr);
       for (let j = 0; j < attributes.length; j++) {
         const key = attributes[j];
         if (!isDateRangeCueAttribute(key)) {
           continue;
         }
-        let cue = cues[key] as any;
+        const cue = cues[key];
         if (cue) {
           if (durationKnown && !appendedDateRangeCues.durationKnown) {
             cue.endTime = endTime;
+          } else if (Math.abs(cue.startTime - startTime) > 0.01) {
+            cue.startTime = startTime;
+            cue.endTime = endTime;
           }
-        } else {
+        } else if (Cue) {
           let data = dateRange.attr[key];
-          cue = new Cue(startTime, endTime, '');
           if (isSCTE35Attribute(key)) {
             data = hexToArrayBuffer(data);
           }
-          cue.value = { key, data };
-          cue.type = MetadataSchema.dateRange;
-          cue.id = id;
-          this.id3Track.addCue(cue);
-          cues[key] = cue;
+          const cue = createCueWithDataFields(
+            Cue,
+            startTime,
+            endTime,
+            { key, data },
+            MetadataSchema.dateRange,
+          );
+          if (cue) {
+            cue.id = id;
+            this.id3Track.addCue(cue);
+            cues[key] = cue;
+          }
         }
       }
+
+      // Keep track of processed DateRanges by ID for updating cues with new DateRange tag attributes
       dateRangeCuesAppended[id] = {
         cues,
         dateRange,

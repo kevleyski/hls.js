@@ -1,5 +1,6 @@
 import { mimeTypeForCodec } from './codecs';
 import type { Level, VideoRange } from '../types/level';
+import type { AudioSelectionOption } from '../types/media-playlist';
 import type { AudioTracksByGroup } from './rendition-helper';
 
 export type MediaDecodingInfo = {
@@ -31,13 +32,20 @@ export const SUPPORTED_INFO_CACHE: Record<
 export function requiresMediaCapabilitiesDecodingInfo(
   level: Level,
   audioTracksByGroup: AudioTracksByGroup,
-  mediaCapabilities: MediaCapabilities | undefined,
   currentVideoRange: VideoRange | undefined,
   currentFrameRate: number,
   currentBw: number,
+  audioPreference: AudioSelectionOption | undefined,
 ): boolean {
   // Only test support when configuration is exceeds minimum options
   const audioGroups = level.audioCodec ? level.audioGroups : null;
+  const audioCodecPreference = audioPreference?.audioCodec;
+  const channelsPreference = audioPreference?.channels;
+  const maxChannels = channelsPreference
+    ? parseInt(channelsPreference)
+    : audioCodecPreference
+      ? Infinity
+      : 2;
   let audioChannels: Record<string, number> | null = null;
   if (audioGroups?.length) {
     try {
@@ -66,26 +74,29 @@ export function requiresMediaCapabilitiesDecodingInfo(
     }
   }
   return (
-    (typeof mediaCapabilities?.decodingInfo == 'function' &&
-      level.videoCodec !== undefined &&
+    (level.videoCodec !== undefined &&
       ((level.width > 1920 && level.height > 1088) ||
         (level.height > 1920 && level.width > 1088) ||
         level.frameRate > Math.max(currentFrameRate, 30) ||
         (level.videoRange !== 'SDR' &&
           level.videoRange !== currentVideoRange) ||
         level.bitrate > Math.max(currentBw, 8e6))) ||
-    (!!audioChannels && Object.keys(audioChannels).length > 1)
+    (!!audioChannels &&
+      Number.isFinite(maxChannels) &&
+      Object.keys(audioChannels).some(
+        (channels) => parseInt(channels) > maxChannels,
+      ))
   );
 }
 
 export function getMediaDecodingInfoPromise(
   level: Level,
   audioTracksByGroup: AudioTracksByGroup,
-  mediaCapabilities: MediaCapabilities,
+  mediaCapabilities: MediaCapabilities | undefined,
 ): Promise<MediaDecodingInfo> {
   const videoCodecs = level.videoCodec;
   const audioCodecs = level.audioCodec;
-  if (!videoCodecs || !audioCodecs) {
+  if (!videoCodecs || !audioCodecs || !mediaCapabilities) {
     return Promise.resolve(SUPPORTED_INFO_DEFAULT);
   }
 
@@ -113,27 +124,31 @@ export function getMediaDecodingInfoPromise(
       },
     }));
 
-  const audioGroupId = level.audioGroupId;
-  if (audioCodecs && audioGroupId) {
-    audioTracksByGroup.groups[audioGroupId]?.tracks.forEach((audioTrack) => {
-      if (audioTrack.groupId === audioGroupId) {
-        const channels = audioTrack.channels || '';
-        const channelsNumber = parseFloat(channels);
-        if (Number.isFinite(channelsNumber) && channelsNumber > 2) {
-          configurations.push.apply(
-            configurations,
-            audioCodecs.split(',').map((audioCodec) => ({
-              type: 'media-source',
-              audio: {
-                contentType: mimeTypeForCodec(audioCodec, 'audio'),
-                channels: '' + channelsNumber,
-                // spatialRendering:
-                //   audioCodec === 'ec-3' && channels.indexOf('JOC'),
-              },
-            })),
-          );
-        }
+  if (audioCodecs && level.audioGroups) {
+    level.audioGroups.forEach((audioGroupId) => {
+      if (!audioGroupId) {
+        return;
       }
+      audioTracksByGroup.groups[audioGroupId]?.tracks.forEach((audioTrack) => {
+        if (audioTrack.groupId === audioGroupId) {
+          const channels = audioTrack.channels || '';
+          const channelsNumber = parseFloat(channels);
+          if (Number.isFinite(channelsNumber) && channelsNumber > 2) {
+            configurations.push.apply(
+              configurations,
+              audioCodecs.split(',').map((audioCodec) => ({
+                type: 'media-source',
+                audio: {
+                  contentType: mimeTypeForCodec(audioCodec, 'audio'),
+                  channels: '' + channelsNumber,
+                  // spatialRendering:
+                  //   audioCodec === 'ec-3' && channels.indexOf('JOC'),
+                },
+              })),
+            );
+          }
+        }
+      });
     });
   }
 

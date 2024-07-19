@@ -77,6 +77,19 @@ const buildConstants = (type, additional = {}) => ({
   },
 });
 
+const buildOnLog = ({ allowCircularDeps } = {}) => {
+  return (level, log, handler) => {
+    if (allowCircularDeps && log.code === 'CIRCULAR_DEPENDENCY') return;
+
+    if (level === 'warn') {
+      // treat warnings as errors
+      handler('error', log);
+    } else {
+      handler(level, log);
+    }
+  };
+};
+
 const workerFnBanner = '(function __HLS_WORKER_BUNDLE__(__IN_WORKER__){';
 const workerFnFooter = '})(false);';
 
@@ -135,6 +148,14 @@ const babelTsWithPresetEnvTargets = ({ targets, stripConsole }) =>
                 path.resolve('src/polyfills/number'),
               );
             } else if (
+              espath.get('callee').matchesPattern('Number.isSafeInteger')
+            ) {
+              espath.node.callee = importHelper.addNamed(
+                espath,
+                'isSafeInteger',
+                path.resolve('src/polyfills/number'),
+              );
+            } else if (
               espath.get('callee').matchesPattern('Number.MAX_SAFE_INTEGER')
             ) {
               espath.node.callee = importHelper.addNamed(
@@ -181,59 +202,62 @@ const basePlugins = [
   commonjs({ transformMixedEsModules: true }),
 ];
 
-function getAliasesForLightDist() {
+function getAliasesForLightDist(format) {
+  const emptyFile = format === 'esm' ? 'empty-es.js' : 'empty.js';
+
   let aliases = {};
 
   if (!addEMESupport) {
     aliases = {
       ...aliases,
-      './controller/eme-controller': './empty.js',
-      './utils/mediakeys-helper': './empty.js',
-      '../utils/mediakeys-helper': '../empty.js',
+      './controller/eme-controller': `./${emptyFile}`,
+      './utils/mediakeys-helper': `./${emptyFile}`,
+      '../utils/mediakeys-helper': `../${emptyFile}`,
     };
   }
 
   if (!addCMCDSupport) {
-    aliases = { ...aliases, './controller/cmcd-controller': './empty.js' };
+    aliases = { ...aliases, './controller/cmcd-controller': `./${emptyFile}` };
   }
 
   if (!addSubtitleSupport) {
     aliases = {
       ...aliases,
-      './utils/cues': './empty.js',
-      './controller/timeline-controller': './empty.js',
-      './controller/subtitle-track-controller': './empty.js',
-      './controller/subtitle-stream-controller': './empty.js',
+      './utils/cues': `./${emptyFile}`,
+      './controller/timeline-controller': `./${emptyFile}`,
+      './controller/subtitle-track-controller': `./${emptyFile}`,
+      './controller/subtitle-stream-controller': `./${emptyFile}`,
     };
   }
 
   if (!addAltAudioSupport) {
     aliases = {
       ...aliases,
-      './controller/audio-track-controller': './empty.js',
-      './controller/audio-stream-controller': './empty.js',
+      './controller/audio-track-controller': `./${emptyFile}`,
+      './controller/audio-stream-controller': `./${emptyFile}`,
     };
   }
 
   if (!addVariableSubstitutionSupport) {
     aliases = {
       ...aliases,
-      './utils/variable-substitution': './empty.js',
-      '../utils/variable-substitution': '../empty.js',
+      './utils/variable-substitution': `./${emptyFile}`,
+      '../utils/variable-substitution': `../${emptyFile}`,
     };
   }
 
   if (!addM2TSAdvancedCodecSupport) {
     aliases = {
       ...aliases,
-      './ac3-demuxer': '../empty.js',
+      './ac3-demuxer': `../${emptyFile}`,
+      './video/hevc-video-parser': `../${emptyFile}`,
     };
   }
 
   if (!addMediaCapabilitiesSupport) {
     aliases = {
       ...aliases,
-      '../utils/mediacapabilities-helper': '../empty.js',
+      '../utils/mediacapabilities-helper': `../${emptyFile}`,
     };
   }
 
@@ -255,12 +279,7 @@ const buildRollupConfig = ({
 
   return {
     input,
-    onwarn: (e) => {
-      if (allowCircularDeps && e.code === 'CIRCULAR_DEPENDENCY') return;
-
-      // treat warnings as errors
-      throw new Error(e);
-    },
+    onLog: buildOnLog({ allowCircularDeps }),
     output: {
       name: 'Hls',
       file: outputFile
@@ -283,7 +302,7 @@ const buildRollupConfig = ({
         ? [alias({ entries: { './transmuxer-worker': '../empty.js' } })]
         : []),
       ...(type === BUILD_TYPE.light
-        ? [alias({ entries: getAliasesForLightDist() })]
+        ? [alias({ entries: getAliasesForLightDist(format) })]
         : []),
       ...(format === 'esm'
         ? [buildBabelEsm({ stripConsole: true })]
@@ -331,10 +350,7 @@ const configs = Object.entries({
   }),
   worker: {
     input: './src/demux/transmuxer-worker.ts',
-    onwarn: (e) => {
-      // treat warnings as errors
-      throw new Error(e);
-    },
+    onLog: buildOnLog(),
     output: {
       name: 'HlsWorker',
       file: './dist/hls.worker.js',
@@ -355,10 +371,7 @@ const configs = Object.entries({
   },
   demo: {
     input: './demo/main.js',
-    onwarn: (e) => {
-      // treat warnings as errors
-      throw new Error(e);
-    },
+    onLog: buildOnLog(),
     output: {
       name: 'HlsDemo',
       file: './dist/hls-demo.js',
