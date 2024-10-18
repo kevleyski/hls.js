@@ -1,29 +1,30 @@
 /**
  * MP4 demuxer
  */
+import { dummyTrack } from './dummy-demuxed-track';
 import {
+  type DemuxedAudioTrack,
+  type DemuxedMetadataTrack,
+  type DemuxedUserdataTrack,
   type Demuxer,
   type DemuxerResult,
-  type PassthroughTrack,
-  type DemuxedAudioTrack,
-  type DemuxedUserdataTrack,
-  type DemuxedMetadataTrack,
   type KeyData,
   MetadataSchema,
+  type PassthroughTrack,
 } from '../types/demuxer';
 import {
-  findBox,
-  segmentValidRange,
   appendUint8Array,
-  parseEmsg,
-  parseSamples,
-  parseInitSegment,
-  RemuxerTrackIdConfig,
+  findBox,
   hasMoofData,
+  parseEmsg,
+  parseInitSegment,
+  parseSamples,
+  RemuxerTrackIdConfig,
+  segmentValidRange,
 } from '../utils/mp4-tools';
-import { dummyTrack } from './dummy-demuxed-track';
-import type { HlsEventEmitter } from '../events';
 import type { HlsConfig } from '../config';
+import type { HlsEventEmitter } from '../events';
+import type { IEmsgParsingData } from '../utils/mp4-tools';
 
 const emsgSchemePattern = /\/emsg[-/]ID3/i;
 
@@ -115,7 +116,6 @@ class MP4Demuxer implements Demuxer {
     } else {
       videoTrack.samples = videoSamples;
     }
-
     const id3Track = this.extractID3Track(videoTrack, timeOffset);
     textTrack.samples = parseSamples(timeOffset, videoTrack);
 
@@ -156,10 +156,7 @@ class MP4Demuxer implements Demuxer {
         emsgs.forEach((data: Uint8Array) => {
           const emsgInfo = parseEmsg(data);
           if (emsgSchemePattern.test(emsgInfo.schemeIdUri)) {
-            const pts = Number.isFinite(emsgInfo.presentationTime)
-              ? emsgInfo.presentationTime! / emsgInfo.timeScale
-              : timeOffset +
-                emsgInfo.presentationTimeDelta! / emsgInfo.timeScale;
+            const pts = getEmsgStartTime(emsgInfo, timeOffset);
             let duration =
               emsgInfo.eventDuration === 0xffffffff
                 ? Number.POSITIVE_INFINITY
@@ -176,6 +173,19 @@ class MP4Demuxer implements Demuxer {
               pts: pts,
               type: MetadataSchema.emsg,
               duration: duration,
+            });
+          } else if (
+            this.config.enableEmsgKLVMetadata &&
+            emsgInfo.schemeIdUri.startsWith('urn:misb:KLV:bin:1910.1')
+          ) {
+            const pts = getEmsgStartTime(emsgInfo, timeOffset);
+            id3Track.samples.push({
+              data: emsgInfo.payload,
+              len: emsgInfo.payload.byteLength,
+              dts: pts,
+              pts: pts,
+              type: MetadataSchema.misbklv,
+              duration: Number.POSITIVE_INFINITY,
             });
           }
         });
@@ -204,6 +214,16 @@ class MP4Demuxer implements Demuxer {
       this.txtTrack =
         undefined;
   }
+}
+
+function getEmsgStartTime(
+  emsgInfo: IEmsgParsingData,
+  timeOffset: number,
+): number {
+  return Number.isFinite(emsgInfo.presentationTime)
+    ? (emsgInfo.presentationTime as number) / emsgInfo.timeScale
+    : timeOffset +
+        (emsgInfo.presentationTimeDelta as number) / emsgInfo.timeScale;
 }
 
 export default MP4Demuxer;

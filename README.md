@@ -111,6 +111,7 @@ The following properties are added to their respective variants' attribute list 
 - `#EXT-X-SKIP:<attribute-list>` Delta Playlists
 - `#EXT-X-RENDITION-REPORT:<attribute-list>`
 - `#EXT-X-DATERANGE:<attribute-list>` Metadata
+  - HLS EXT-X-DATERANGE Schema for Interstitials
 - `#EXT-X-DEFINE:<attribute-list>` Variable Import and Substitution (`NAME,VALUE,IMPORT,QUERYPARAM` attributes)
 - `#EXT-X-GAP` (Skips loading GAP segments and parts. Skips playback of unbuffered program containing only GAP content and no suitable alternates. See [#2940](https://github.com/video-dev/hls.js/issues/2940))
 
@@ -127,7 +128,6 @@ Parsed but missing feature support
 
 For a complete list of issues, see ["Top priorities" in the Release Planning and Backlog project tab](https://github.com/video-dev/hls.js/projects/6). Codec support is dependent on the runtime environment (for example, not all browsers on the same OS support HEVC).
 
-- HLS Interstitials
 - `#EXT-X-I-FRAME-STREAM-INF` I-frame Media Playlist files
 - "identity" format `SAMPLE-AES` method keys with fmp4, aac, mp3, vtt... segments (MPEG-2 TS only)
 - MPEG-2 TS segments with FairPlay Streaming, PlayReady, or Widevine encryption
@@ -391,6 +391,28 @@ To check for native browser support first and then fallback to HLS.js, swap thes
     hls.attachMedia(video);
   }
 </script>
+```
+
+#### Ensure correct time in video
+
+HLS transcoding of an original video file often pushes the time of the first frame a bit. If you depend on having an exact match of frame times between original video and HLS stream, you need to account for this:
+
+```javascript
+let tOffset = 0;
+const getAppendedOffset = (eventName, { frag }) => {
+  if (frag.type === 'main' && frag.sn !== 'initSegment' && frag.elementaryStreams.video) {
+    const { start, startDTS, startPTS, maxStartPTS, elementaryStreams } = frag;
+    tOffset = elementaryStreams.video.startPTS - start;
+    hls.off(Hls.Events.BUFFER_APPENDED, getAppendedOffset);
+    console.log('video timestamp offset:', tOffset, { start, startDTS, startPTS, maxStartPTS, elementaryStreams });
+  }
+}
+hls.on(Hls.Events.BUFFER_APPENDED, getAppendedOffset);
+// and account for this offset, for example like this:
+const video = document.querySelector('video');
+video.addEventListener('timeupdate', () => setTime(Math.max(0, video.currentTime - tOffset))
+const seek = (t) => video.currentTime = t + tOffset;
+const getDuration = () => video.duration - tOffset;
 ```
 
 For more embed and API examples see [docs/API.md](./docs/API.md).
