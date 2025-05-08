@@ -6,8 +6,10 @@ import { ElementaryStreamTypes } from '../loader/fragment';
 import { PlaylistLevelType } from '../types/loader';
 import { BufferHelper } from '../utils/buffer-helper';
 import {
+  areCodecsMediaSourceSupported,
   getCodecCompatibleName,
   pickMostCompleteCodecName,
+  replaceVideoCodec,
 } from '../utils/codecs';
 import { Logger } from '../utils/logger';
 import {
@@ -15,9 +17,10 @@ import {
   isCompatibleTrackChange,
   isManagedMediaSource,
 } from '../utils/mediasource-helper';
-import type Hls from '../hls';
+import { stringify } from '../utils/safe-json-stringify';
 import type { FragmentTracker } from './fragment-tracker';
 import type { HlsConfig } from '../config';
+import type Hls from '../hls';
 import type { MediaFragment, Part } from '../loader/fragment';
 import type { LevelDetails } from '../loader/level-details';
 import type {
@@ -82,10 +85,10 @@ export default class BufferController extends Logger implements ComponentAPI {
   private bufferCodecEventsTotal: number = 0;
 
   // A reference to the attached media element
-  public media: HTMLMediaElement | null = null;
+  private media: HTMLMediaElement | null = null;
 
   // A reference to the active media source
-  public mediaSource: MediaSource | null = null;
+  private mediaSource: MediaSource | null = null;
 
   // Last MP3 audio chunk appended
   private lastMpegAudioChunk: ChunkMetadata | null = null;
@@ -152,7 +155,7 @@ export default class BufferController extends Logger implements ComponentAPI {
     this._onStartStreaming = this._onEndStreaming = null;
   }
 
-  protected registerListeners() {
+  private registerListeners() {
     const { hls } = this;
     hls.on(Events.MEDIA_ATTACHING, this.onMediaAttaching, this);
     hls.on(Events.MEDIA_DETACHING, this.onMediaDetaching, this);
@@ -169,7 +172,7 @@ export default class BufferController extends Logger implements ComponentAPI {
     hls.on(Events.ERROR, this.onError, this);
   }
 
-  protected unregisterListeners() {
+  private unregisterListeners() {
     const { hls } = this;
     hls.off(Events.MEDIA_ATTACHING, this.onMediaAttaching, this);
     hls.off(Events.MEDIA_DETACHING, this.onMediaDetaching, this);
@@ -247,7 +250,7 @@ export default class BufferController extends Logger implements ComponentAPI {
     this.details = null;
   }
 
-  protected onManifestParsed(
+  private onManifestParsed(
     event: Events.MANIFEST_PARSED,
     data: ManifestParsedData,
   ) {
@@ -256,7 +259,7 @@ export default class BufferController extends Logger implements ComponentAPI {
     // in case alt audio is not used, only one BUFFER_CODEC event will be fired from main stream controller
     // it will contain the expected nb of source buffers, no need to compute it
     let codecEvents: number = 2;
-    if ((data.audio && !data.video) || !data.altAudio || !__USE_ALT_AUDIO__) {
+    if ((data.audio && !data.video) || !data.altAudio) {
       codecEvents = 1;
     }
     this.bufferCodecEventsTotal = codecEvents;
@@ -270,7 +273,7 @@ export default class BufferController extends Logger implements ComponentAPI {
     }
   }
 
-  protected onMediaAttaching(
+  private onMediaAttaching(
     event: Events.MEDIA_ATTACHING,
     data: MediaAttachingData,
   ) {
@@ -340,11 +343,8 @@ export default class BufferController extends Logger implements ComponentAPI {
       : null;
     const trackCount = trackNames ? trackNames.length : 0;
     const mediaSourceOpenCallback = () => {
-      if (this.media) {
-        const readyState = this.mediaSource?.readyState;
-        if (readyState === 'open' || readyState === 'ended') {
-          this._onMediaSourceOpen();
-        }
+      if (this.media && this.mediaSourceOpenOrEnded) {
+        this._onMediaSourceOpen();
       }
     };
     if (transferredTracks && trackNames && trackCount) {
@@ -356,8 +356,8 @@ export default class BufferController extends Logger implements ComponentAPI {
       }
       this
         .log(`attachTransferred: (bufferCodecEventsTotal ${this.bufferCodecEventsTotal})
-required tracks: ${JSON.stringify(requiredTracks, (key, value) => (key === 'initSegment' ? undefined : value))};
-transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'initSegment' ? undefined : value))}}`);
+required tracks: ${stringify(requiredTracks, (key, value) => (key === 'initSegment' ? undefined : value))};
+transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSegment' ? undefined : value))}}`);
       if (!isCompatibleTrackChange(transferredTracks, requiredTracks)) {
         // destroy attaching media source
         data.mediaSource = null;
@@ -429,6 +429,11 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }
   }
 
+  private get mediaSourceOpenOrEnded(): boolean {
+    const readyState = this.mediaSource?.readyState;
+    return readyState === 'open' || readyState === 'ended';
+  }
+
   private _onEndStreaming = (event) => {
     if (!this.hls) {
       return;
@@ -438,6 +443,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }
     this.hls.pauseBuffering();
   };
+
   private _onStartStreaming = (event) => {
     if (!this.hls) {
       return;
@@ -445,7 +451,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     this.hls.resumeBuffering();
   };
 
-  protected onMediaDetaching(
+  private onMediaDetaching(
     event: Events.MEDIA_DETACHING,
     data: MediaDetachingData,
   ) {
@@ -466,18 +472,23 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
         });
         this.resetQueue();
       } else {
-        if (mediaSource.readyState === 'open') {
+        if (this.mediaSourceOpenOrEnded) {
+          const open = mediaSource.readyState === 'open';
           try {
             const sourceBuffers = mediaSource.sourceBuffers;
             for (let i = sourceBuffers.length; i--; ) {
-              sourceBuffers[i].abort();
+              if (open) {
+                sourceBuffers[i].abort();
+              }
               mediaSource.removeSourceBuffer(sourceBuffers[i]);
             }
-            // endOfStream could trigger exception if any sourcebuffer is in updating state
-            // we don't really care about checking sourcebuffer state here,
-            // as we are anyway detaching the MediaSource
-            // let's just avoid this exception to propagate
-            mediaSource.endOfStream();
+            if (open) {
+              // endOfStream could trigger exception if any sourcebuffer is in updating state
+              // we don't really care about checking sourcebuffer state here,
+              // as we are anyway detaching the MediaSource
+              // let's just avoid this exception to propagate
+              mediaSource.endOfStream();
+            }
           } catch (err) {
             this.warn(
               `onMediaDetaching: ${err.message} while calling endOfStream`,
@@ -533,7 +544,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     this.hls.trigger(Events.MEDIA_DETACHED, data);
   }
 
-  protected onBufferReset() {
+  private onBufferReset() {
     this.sourceBuffers.forEach(([type]) => {
       if (type) {
         this.resetBuffer(type);
@@ -573,10 +584,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     this.operationQueue = new BufferOperationQueue(this.tracks);
   }
 
-  protected onBufferCodecs(
-    event: Events.BUFFER_CODECS,
-    data: BufferCodecsData,
-  ) {
+  private onBufferCodecs(event: Events.BUFFER_CODECS, data: BufferCodecsData) {
     const tracks = this.tracks;
     const trackNames = Object.keys(data);
     this.log(
@@ -601,18 +609,19 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }
     trackNames.forEach((trackName: SourceBufferName) => {
       const parsedTrack = data[trackName] as ParsedTrack;
-      const { id, codec, levelCodec, container, metadata } = parsedTrack;
+      const { id, codec, levelCodec, container, metadata, supplemental } =
+        parsedTrack;
       let track = tracks[trackName];
       const transferredTrack = this.transferData?.tracks?.[trackName];
       const sbTrack = transferredTrack?.buffer ? transferredTrack : track;
       const sbCodec = sbTrack?.pendingCodec || sbTrack?.codec;
       const trackLevelCodec = sbTrack?.levelCodec;
-      const forceChangeType = !sbTrack || !!this.hls.config.assetPlayerId;
       if (!track) {
         track = tracks[trackName] = {
           buffer: undefined,
           listeners: [],
           codec,
+          supplemental,
           container,
           levelCodec,
           metadata,
@@ -630,7 +639,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
       );
       let trackCodec = pickMostCompleteCodecName(codec, levelCodec);
       const nextCodec = trackCodec?.replace(VIDEO_CODEC_PROFILE_REPLACE, '$1');
-      if (trackCodec && (currentCodec !== nextCodec || forceChangeType)) {
+      if (trackCodec && currentCodecFull && currentCodec !== nextCodec) {
         if (trackName.slice(0, 5) === 'audio') {
           trackCodec = getCodecCompatibleName(trackCodec, this.appendSource);
         }
@@ -651,7 +660,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     if (this.sourceBufferCount) {
       return;
     }
-    if (this.mediaSource !== null && this.mediaSource.readyState === 'open') {
+    if (this.mediaSourceOpenOrEnded) {
       this.checkPendingTracks();
     }
   }
@@ -669,7 +678,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }, {});
   }
 
-  protected appendChangeType(
+  private appendChangeType(
     type: SourceBufferName,
     container: string,
     codec: string,
@@ -741,7 +750,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }
   }
 
-  protected onBufferAppending(
+  private onBufferAppending(
     event: Events.BUFFER_APPENDING,
     eventData: BufferAppendingData,
   ) {
@@ -885,34 +894,36 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
           err: error,
           fatal: false,
         };
-
+        const mediaError = this.media?.error;
         if ((error as DOMException).code === DOMException.QUOTA_EXCEEDED_ERR) {
           // QuotaExceededError: http://www.w3.org/TR/html5/infrastructure.html#quotaexceedederror
           // let's stop appending any segments, and report BUFFER_FULL_ERROR error
           event.details = ErrorDetails.BUFFER_FULL_ERROR;
         } else if (
           (error as DOMException).code === DOMException.INVALID_STATE_ERR &&
-          this.mediaSource?.readyState === 'open' &&
-          !this.media?.error
+          this.mediaSourceOpenOrEnded &&
+          !mediaError
         ) {
           // Allow retry for "Failed to execute 'appendBuffer' on 'SourceBuffer': This SourceBuffer is still processing" errors
           event.errorAction = createDoNothingErrorAction(true);
-        } else if (error.name === TRACK_REMOVED_ERROR_NAME) {
+        } else if (
+          error.name === TRACK_REMOVED_ERROR_NAME &&
+          this.sourceBufferCount === 0
+        ) {
           // Do nothing if sourceBuffers were removed (media is detached and append was not aborted)
-          if (this.sourceBufferCount === 0) {
-            event.errorAction = createDoNothingErrorAction(true);
-          } else {
-            ++this.appendErrors[type];
-          }
+          event.errorAction = createDoNothingErrorAction(true);
         } else {
           const appendErrorCount = ++this.appendErrors[type];
           /* with UHD content, we could get loop of quota exceeded error until
             browser is able to evict some data from sourcebuffer. Retrying can help recover.
           */
           this.warn(
-            `Failed ${appendErrorCount}/${this.hls.config.appendErrorMaxRetry} times to append segment in "${type}" sourceBuffer`,
+            `Failed ${appendErrorCount}/${this.hls.config.appendErrorMaxRetry} times to append segment in "${type}" sourceBuffer (${mediaError ? mediaError : 'no media error'})`,
           );
-          if (appendErrorCount >= this.hls.config.appendErrorMaxRetry) {
+          if (
+            appendErrorCount >= this.hls.config.appendErrorMaxRetry ||
+            !!mediaError
+          ) {
             event.fatal = true;
           }
         }
@@ -949,7 +960,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     };
   }
 
-  protected onBufferFlushing(
+  private onBufferFlushing(
     event: Events.BUFFER_FLUSHING,
     data: BufferFlushingData,
   ) {
@@ -965,7 +976,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }
   }
 
-  protected onFragParsed(event: Events.FRAG_PARSED, data: FragParsedData) {
+  private onFragParsed(event: Events.FRAG_PARSED, data: FragParsedData) {
     const { frag, part } = data;
     const buffersAppendedTo: SourceBufferName[] = [];
     const elementaryStreams = part
@@ -1003,14 +1014,17 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
       );
     }
 
-    this.blockBuffers(onUnblocked, buffersAppendedTo);
+    this.blockBuffers(onUnblocked, buffersAppendedTo).catch((error) => {
+      this.warn(`Fragment buffered callback ${error}`);
+      this.stepOperationQueue(this.sourceBufferTypes);
+    });
   }
 
   private onFragChanged(event: Events.FRAG_CHANGED, data: FragChangedData) {
     this.trimBuffers();
   }
 
-  get bufferedToEnd(): boolean {
+  public get bufferedToEnd(): boolean {
     return (
       this.sourceBufferCount > 0 &&
       !this.sourceBuffers.some(
@@ -1022,7 +1036,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
 
   // on BUFFER_EOS mark matching sourcebuffer(s) as "ending" and "ended" and queue endOfStream after remaining operations(s)
   // an undefined data.type will mark all buffers as EOS.
-  protected onBufferEos(event: Events.BUFFER_EOS, data: BufferEOSData) {
+  private onBufferEos(event: Events.BUFFER_EOS, data: BufferEOSData) {
     this.sourceBuffers.forEach(([type]) => {
       if (type) {
         const track = this.tracks[type] as SourceBufferTrack;
@@ -1042,17 +1056,10 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
       !this.sourceBuffers.some(([type]) => type && !this.tracks[type]?.ended);
 
     if (allTracksEnding) {
-      this.log(`Queueing EOS`);
-      this.blockUntilOpen(() => {
-        this.sourceBuffers.forEach(([type]) => {
-          if (type !== null) {
-            const track = this.tracks[type];
-            if (track) {
-              track.ending = false;
-            }
-          }
-        });
-        if (allowEndOfStream) {
+      if (allowEndOfStream) {
+        this.log(`Queueing EOS`);
+        this.blockUntilOpen(() => {
+          this.tracksEnded();
           const { mediaSource } = this;
           if (!mediaSource || mediaSource.readyState !== 'open') {
             if (mediaSource) {
@@ -1065,13 +1072,28 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
           this.log(`Calling mediaSource.endOfStream()`);
           // Allow this to throw and be caught by the enqueueing function
           mediaSource.endOfStream();
-        }
+
+          this.hls.trigger(Events.BUFFERED_TO_END, undefined);
+        });
+      } else {
+        this.tracksEnded();
         this.hls.trigger(Events.BUFFERED_TO_END, undefined);
-      });
+      }
     }
   }
 
-  protected onLevelUpdated(
+  private tracksEnded() {
+    this.sourceBuffers.forEach(([type]) => {
+      if (type !== null) {
+        const track = this.tracks[type];
+        if (track) {
+          track.ending = false;
+        }
+      }
+    });
+  }
+
+  private onLevelUpdated(
     event: Events.LEVEL_UPDATED,
     { details }: LevelUpdatedData,
   ) {
@@ -1127,7 +1149,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
         ? config.liveBackBufferLength
         : config.backBufferLength;
 
-    if (Number.isFinite(backBufferLength) && backBufferLength > 0) {
+    if (Number.isFinite(backBufferLength) && backBufferLength >= 0) {
       const maxBackBufferLength = Math.max(backBufferLength, targetDuration);
       const targetBackBufferPosition =
         Math.floor(currentTime / targetDuration) * targetDuration -
@@ -1185,10 +1207,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
             this.hls.trigger(Events.LIVE_BACK_BUFFER_REACHED, {
               bufferEnd: targetBackBufferPosition,
             });
-          } else if (
-            track?.ended &&
-            buffered.end(buffered.length - 1) - currentTime < targetDuration * 2
-          ) {
+          } else if (track?.ended) {
             this.log(
               `Cannot flush ${type} back buffer while SourceBuffer is in ended state`,
             );
@@ -1220,20 +1239,11 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
         }
         const bufferStart = buffered.start(numBufferedRanges - 1);
         const bufferEnd = buffered.end(numBufferedRanges - 1);
-        const track = this.tracks[type];
         // No flush if we can tolerate the current buffer length or the current buffer range we would flush is contiguous with current position
         if (
           targetFrontBufferPosition > bufferStart ||
           (currentTime >= bufferStart && currentTime <= bufferEnd)
         ) {
-          return;
-        } else if (
-          track?.ended &&
-          currentTime - bufferEnd < 2 * targetDuration
-        ) {
-          this.log(
-            `Cannot flush ${type} front buffer while SourceBuffer is in ended state`,
-          );
           return;
         }
 
@@ -1262,8 +1272,6 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }
     const playlistEnd = details.edge;
     if (details.live && this.hls.config.liveDurationInfinity) {
-      // Override duration to Infinity
-      mediaSource.duration = Infinity;
       const len = details.fragments.length;
       if (len && details.live && !!mediaSource.setLiveSeekableRange) {
         const start = Math.max(0, details.fragmentStart);
@@ -1275,6 +1283,9 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     }
     const overrideDuration = this.overrides?.duration;
     if (overrideDuration) {
+      if (!Number.isFinite(overrideDuration)) {
+        return null;
+      }
       return { duration: overrideDuration };
     }
     const mediaDuration = this.media.duration;
@@ -1326,10 +1337,10 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     );
   }
 
-  protected checkPendingTracks() {
+  private checkPendingTracks() {
     const { bufferCodecEventsTotal, pendingTrackCount, tracks } = this;
     this.log(
-      `checkPendingTracks (pending: ${pendingTrackCount} codec events expected: ${bufferCodecEventsTotal}) ${JSON.stringify(tracks)}`,
+      `checkPendingTracks (pending: ${pendingTrackCount} codec events expected: ${bufferCodecEventsTotal}) ${stringify(tracks)}`,
     );
     // Check if we've received all of the expected bufferCodec events. When none remain, create all the sourceBuffers at once.
     // This is important because the MSE spec allows implementations to throw QuotaExceededErrors if creating new sourceBuffers after
@@ -1342,7 +1353,6 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
       } else {
         // ok, let's create them now !
         this.createSourceBuffers();
-        this.bufferCreated();
       }
     }
   }
@@ -1357,6 +1367,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
             buffer,
             container: track.container,
             codec: track.codec,
+            supplemental: track.supplemental,
             levelCodec: track.levelCodec,
             id: track.id,
             metadata: track.metadata,
@@ -1398,7 +1409,7 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
         const mimeType = `${track.container};codecs=${codec}`;
         track.codec = codec;
         this.log(
-          `creating sourceBuffer(${mimeType})${this.currentOp(type) ? ' Queued' : ''} ${JSON.stringify(track)}`,
+          `creating sourceBuffer(${mimeType})${this.currentOp(type) ? ' Queued' : ''} ${stringify(track)}`,
         );
         try {
           const sb = mediaSource.addSourceBuffer(
@@ -1415,6 +1426,10 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
           this.error(
             `error while trying to add sourceBuffer: ${error.message}`,
           );
+          // remove init segment from queue and delete track info
+          this.shiftAndExecuteNext(type);
+          this.operationQueue?.removeBlockers();
+          delete this.tracks[type];
           this.hls.trigger(Events.ERROR, {
             type: ErrorTypes.MEDIA_ERROR,
             details: ErrorDetails.BUFFER_ADD_CODEC_ERROR,
@@ -1422,16 +1437,28 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
             error,
             sourceBufferName: type,
             mimeType: mimeType,
+            parent: track.id as PlaylistLevelType,
           });
-          break;
+          return;
         }
         this.trackSourceBuffer(type, track);
       }
     }
+    this.bufferCreated();
   }
 
   private getTrackCodec(track: BaseTrack, trackName: SourceBufferName): string {
-    const codec = pickMostCompleteCodecName(track.codec, track.levelCodec);
+    // Use supplemental video codec when supported when adding SourceBuffer (#5558)
+    const supplementalCodec = track.supplemental;
+    let trackCodec = track.codec;
+    if (
+      supplementalCodec &&
+      (trackName === 'video' || trackName === 'audiovideo') &&
+      areCodecsMediaSourceSupported(supplementalCodec, 'video')
+    ) {
+      trackCodec = replaceVideoCodec(trackCodec, supplementalCodec);
+    }
+    const codec = pickMostCompleteCodecName(trackCodec, track.levelCodec);
     if (codec) {
       if (trackName.slice(0, 5) === 'audio') {
         return getCodecCompatibleName(codec, this.appendSource);
@@ -1452,11 +1479,12 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
       codec,
       container: track.container,
       levelCodec: track.levelCodec,
+      supplemental: track.supplemental,
       metadata: track.metadata,
       id: track.id,
       listeners: [],
     };
-
+    this.removeBufferListeners(type);
     this.addBufferListener(type, 'updatestart', this.onSBUpdateStart);
     this.addBufferListener(type, 'updateend', this.onSBUpdateEnd);
     this.addBufferListener(type, 'error', this.onSBUpdateError);
@@ -1487,15 +1515,14 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     if (!media || !mediaSource) {
       return;
     }
+    // once received, don't listen anymore to sourceopen event
+    mediaSource.removeEventListener('sourceopen', this._onMediaSourceOpen);
     media.removeEventListener('emptied', this._onMediaEmptied);
     this.updateDuration();
     this.hls.trigger(Events.MEDIA_ATTACHED, {
       media,
       mediaSource: mediaSource as MediaSource,
     });
-
-    // once received, don't listen anymore to sourceopen event
-    mediaSource.removeEventListener('sourceopen', this._onMediaSourceOpen);
 
     if (this.mediaSource !== null) {
       this.checkPendingTracks();
@@ -1618,9 +1645,18 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
 
   private blockUntilOpen(callback: () => void) {
     if (this.isUpdating() || this.isQueued()) {
-      this.blockBuffers(callback);
+      this.blockBuffers(callback).catch((error) => {
+        this.warn(`SourceBuffer blocked callback ${error}`);
+        this.stepOperationQueue(this.sourceBufferTypes);
+      });
     } else {
-      callback();
+      try {
+        callback();
+      } catch (error) {
+        this.warn(
+          `Callback run without blocking ${this.operationQueue} ${error}`,
+        );
+      }
     }
   }
 
@@ -1644,11 +1680,10 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
   private blockBuffers(
     onUnblocked: () => void,
     bufferNames: SourceBufferName[] = this.sourceBufferTypes,
-  ) {
+  ): Promise<void> {
     if (!bufferNames.length) {
       this.log('Blocking operation requested, but no SourceBuffers exist');
-      Promise.resolve().then(onUnblocked);
-      return;
+      return Promise.resolve().then(onUnblocked);
     }
     const { operationQueue } = this;
 
@@ -1660,13 +1695,13 @@ transfer tracks: ${JSON.stringify(transferredTracks, (key, value) => (key === 'i
     if (audioBlocked) {
       this.unblockAudio();
     }
-    Promise.all(blockingOperations).then((result) => {
+    return Promise.all(blockingOperations).then((result) => {
       if (operationQueue !== this.operationQueue) {
         return;
       }
       // logger.debug(`[buffer-controller]: Blocking operation resolved; unblocking ${buffers} SourceBuffer`);
       onUnblocked();
-      this.stepOperationQueue(bufferNames);
+      this.stepOperationQueue(this.sourceBufferTypes);
     });
   }
 

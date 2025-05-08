@@ -47,9 +47,8 @@ export class AttrList {
       }
 
       return value;
-    } else {
-      return null;
     }
+    return null;
   }
 
   hexadecimalIntegerAsNumber(attrName: string): number {

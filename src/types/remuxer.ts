@@ -3,6 +3,7 @@ import type {
   DemuxedAudioTrack,
   DemuxedMetadataTrack,
   DemuxedUserdataTrack,
+  DemuxedVideoTrack,
   DemuxedVideoTrackBase,
   MetadataSample,
   UserdataSample,
@@ -61,6 +62,30 @@ export interface RemuxedUserdata {
   samples: UserdataSample[];
 }
 
+export type Mp4SampleFlags = {
+  isLeading: 0;
+  isDependedOn: 0;
+  hasRedundancy: 0;
+  degradPrio: 0;
+  dependsOn: 1 | 2;
+  isNonSync: 0 | 1;
+};
+
+export type Mp4Sample = {
+  size: number;
+  duration: number;
+  cts: number;
+  flags: Mp4SampleFlags;
+};
+
+export type RemuxedAudioTrackSamples = DemuxedAudioTrack & {
+  samples: Mp4Sample[];
+};
+
+export type RemuxedVideoTrackSamples = DemuxedVideoTrack & {
+  samples: Mp4Sample[];
+};
+
 export interface RemuxerResult {
   audio?: RemuxedTrack;
   video?: RemuxedTrack;
@@ -74,4 +99,5 @@ export interface InitSegmentData {
   tracks?: TrackSet;
   initPTS: number | undefined;
   timescale: number | undefined;
+  trackId: number | undefined;
 }

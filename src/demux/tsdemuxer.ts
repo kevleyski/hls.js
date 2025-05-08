@@ -34,7 +34,7 @@ import { appendUint8Array, RemuxerTrackIdConfig } from '../utils/mp4-tools';
 import type { HlsConfig } from '../config';
 import type { HlsEventEmitter } from '../events';
 import type BaseVideoParser from './video/base-video-parser';
-import type { AudioFrame } from '../types/demuxer';
+import type { AudioFrame, DemuxedAAC } from '../types/demuxer';
 import type { TypeSupported } from '../utils/codecs';
 import type { ILogger } from '../utils/logger';
 
@@ -564,15 +564,19 @@ class TSDemuxer implements Demuxer {
     return new Promise((resolve) => {
       const { audioTrack, videoTrack } = demuxResult;
       if (audioTrack.samples && audioTrack.segmentCodec === 'aac') {
-        sampleAes.decryptAacSamples(audioTrack.samples, 0, () => {
-          if (videoTrack.samples) {
-            sampleAes.decryptAvcSamples(videoTrack.samples, 0, 0, () => {
+        sampleAes.decryptAacSamples(
+          (audioTrack as DemuxedAAC).samples,
+          0,
+          () => {
+            if (videoTrack.samples) {
+              sampleAes.decryptAvcSamples(videoTrack.samples, 0, 0, () => {
+                resolve(demuxResult);
+              });
+            } else {
               resolve(demuxResult);
-            });
-          } else {
-            resolve(demuxResult);
-          }
-        });
+            }
+          },
+        );
       } else if (videoTrack.samples) {
         sampleAes.decryptAvcSamples(videoTrack.samples, 0, 0, () => {
           resolve(demuxResult);
@@ -774,8 +778,8 @@ function parsePMT(
     audioPid: -1,
     videoPid: -1,
     id3Pid: -1,
-    segmentVideoCodec: 'avc',
-    segmentAudioCodec: 'aac',
+    segmentVideoCodec: 'avc' as 'avc' | 'hevc',
+    segmentAudioCodec: 'aac' as 'aac' | 'ac3' | 'mp3',
   };
   const sectionLength = ((data[offset + 1] & 0x0f) << 8) | data[offset + 2];
   const tableEnd = offset + 3 + sectionLength - 4;
@@ -822,7 +826,6 @@ function parsePMT(
         // logger.log('AVC PID:'  + pid);
         if (result.videoPid === -1) {
           result.videoPid = pid;
-          result.segmentVideoCodec = 'avc';
         }
 
         break;

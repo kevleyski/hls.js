@@ -3,6 +3,7 @@ import { ErrorDetails, ErrorTypes } from '../errors';
 import { Events } from '../events';
 import { HdcpLevels } from '../types/level';
 import { PlaylistContextType, PlaylistLevelType } from '../types/loader';
+import { getCodecsForMimeType } from '../utils/codecs';
 import {
   getRetryConfig,
   isTimeoutError,
@@ -176,7 +177,7 @@ export default class ErrorController
       case ErrorDetails.SUBTITLE_LOAD_ERROR:
       case ErrorDetails.SUBTITLE_TRACK_LOAD_TIMEOUT:
         if (context) {
-          const level = hls.levels[hls.loadLevel];
+          const level = hls.loadLevelObj;
           if (
             level &&
             ((context.type === PlaylistContextType.AUDIO_TRACK &&
@@ -200,7 +201,7 @@ export default class ErrorController
         return;
       case ErrorDetails.KEY_SYSTEM_STATUS_OUTPUT_RESTRICTED:
         {
-          const level = hls.levels[hls.loadLevel];
+          const level = hls.loadLevelObj;
           const restrictedHdcpLevel = level?.attrs['HDCP-LEVEL'];
           if (restrictedHdcpLevel) {
             data.errorAction = {
@@ -506,6 +507,19 @@ export default class ErrorController
       data.errorAction.resolved = true;
       // Stream controller is responsible for this but won't switch on false start
       this.hls.nextLoadLevel = this.hls.nextAutoLevel;
+      if (
+        data.details === ErrorDetails.BUFFER_ADD_CODEC_ERROR &&
+        data.mimeType &&
+        data.sourceBufferName !== 'audiovideo'
+      ) {
+        const codec = getCodecsForMimeType(data.mimeType);
+        const levels = this.hls.levels;
+        for (let i = levels.length; i--; ) {
+          if (levels[i][`${data.sourceBufferName}Codec`] === codec) {
+            this.hls.removeLevel(i);
+          }
+        }
+      }
     }
   }
 }

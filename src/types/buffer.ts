@@ -1,3 +1,12 @@
+declare global {
+  interface ArrayBuffer {
+    ' buffer_kind'?: 'array';
+  }
+  interface Uint8Array {
+    ' buffer_kind'?: 'uint8';
+  }
+}
+
 export type SourceBufferName = 'video' | 'audio' | 'audiovideo';
 
 /* eslint-disable no-restricted-globals */
@@ -11,6 +20,7 @@ export interface BaseTrack {
   id: 'audio' | 'main';
   container: string;
   codec?: string;
+  supplemental?: string;
   levelCodec?: string;
   pendingCodec?: string;
   metadata?: {

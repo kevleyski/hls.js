@@ -3,6 +3,11 @@ import { findFragmentByPTS } from './fragment-finders';
 import { FragmentState } from './fragment-tracker';
 import { ErrorDetails, ErrorTypes } from '../errors';
 import { Events } from '../events';
+import {
+  type Fragment,
+  isMediaFragment,
+  type MediaFragment,
+} from '../loader/fragment';
 import { Level } from '../types/level';
 import { PlaylistLevelType } from '../types/loader';
 import { BufferHelper } from '../utils/buffer-helper';
@@ -13,9 +18,8 @@ import {
 } from '../utils/encryption-methods-util';
 import { addSliding } from '../utils/level-helper';
 import { subtitleOptionsIdentical } from '../utils/media-option-attributes';
-import type Hls from '../hls';
 import type { FragmentTracker } from './fragment-tracker';
-import type { Fragment, MediaFragment } from '../loader/fragment';
+import type Hls from '../hls';
 import type KeyLoader from '../loader/key-loader';
 import type { LevelDetails } from '../loader/level-details';
 import type { NetworkComponentAPI } from '../types/component-api';
@@ -90,16 +94,15 @@ export class SubtitleStreamController
     hls.off(Events.BUFFER_FLUSHING, this.onBufferFlushing, this);
   }
 
-  startLoad(startPosition: number) {
+  startLoad(startPosition: number, skipSeekToStartPosition?: boolean) {
     this.stopLoad();
     this.state = State.IDLE;
 
     this.setInterval(TICK_INTERVAL);
 
-    this.nextLoadPosition =
-      this.startPosition =
-      this.lastCurrentTime =
-        startPosition;
+    this.nextLoadPosition = this.lastCurrentTime =
+      startPosition + this.timelineOffset;
+    this.startPosition = skipSeekToStartPosition ? -1 : startPosition;
 
     this.tick();
   }
@@ -126,8 +129,8 @@ export class SubtitleStreamController
     data: SubtitleFragProcessed,
   ) {
     const { frag, success } = data;
-    if (frag.sn !== 'initSegment') {
-      this.fragPrevious = frag as MediaFragment;
+    if (isMediaFragment(frag)) {
+      this.fragPrevious = frag;
     }
     this.state = State.IDLE;
     if (!success) {
@@ -421,6 +424,9 @@ export class SubtitleStreamController
       if (!track || !levels.length || !track.details) {
         return;
       }
+      if (this.waitForLive(track)) {
+        return;
+      }
       const { config } = this;
       const currentTime = this.getLoadPosition();
       const bufferedInfo = BufferHelper.bufferedInfo(
@@ -440,7 +446,7 @@ export class SubtitleStreamController
       const fragLen = fragments.length;
       const end = trackDetails.edge;
 
-      let foundFrag: Fragment | null = null;
+      let foundFrag: MediaFragment | null = null;
       const fragPrevious = this.fragPrevious;
       if (targetBufferTime < end) {
         const tolerance = config.maxFragLookUpTolerance;
@@ -462,27 +468,28 @@ export class SubtitleStreamController
       } else {
         foundFrag = fragments[fragLen - 1];
       }
+      foundFrag = this.filterReplacedPrimary(foundFrag, track.details);
       if (!foundFrag) {
         return;
       }
-      foundFrag = this.mapToInitFragWhenRequired(foundFrag) as Fragment;
-      if (foundFrag.sn !== 'initSegment') {
-        // Load earlier fragment in same discontinuity to make up for misaligned playlists and cues that extend beyond end of segment
-        const curSNIdx = foundFrag.sn - trackDetails.startSN;
-        const prevFrag = fragments[curSNIdx - 1];
-        if (
-          prevFrag &&
-          prevFrag.cc === foundFrag.cc &&
-          this.fragmentTracker.getState(prevFrag) === FragmentState.NOT_LOADED
-        ) {
-          foundFrag = prevFrag;
-        }
+      // Load earlier fragment in same discontinuity to make up for misaligned playlists and cues that extend beyond end of segment
+      const curSNIdx = foundFrag.sn - trackDetails.startSN;
+      const prevFrag = fragments[curSNIdx - 1];
+      if (
+        prevFrag &&
+        prevFrag.cc === foundFrag.cc &&
+        this.fragmentTracker.getState(prevFrag) === FragmentState.NOT_LOADED
+      ) {
+        foundFrag = prevFrag;
       }
       if (
         this.fragmentTracker.getState(foundFrag) === FragmentState.NOT_LOADED
       ) {
         // only load if fragment is not loaded
-        this.loadFragment(foundFrag, track, targetBufferTime);
+        const fragToLoad = this.mapToInitFragWhenRequired(foundFrag);
+        if (fragToLoad) {
+          this.loadFragment(fragToLoad, track, targetBufferTime);
+        }
       }
     }
   }
@@ -492,7 +499,7 @@ export class SubtitleStreamController
     level: Level,
     targetBufferTime: number,
   ) {
-    if (frag.sn === 'initSegment') {
+    if (!isMediaFragment(frag)) {
       this._loadInitSegment(frag, level);
     } else {
       super.loadFragment(frag, level, targetBufferTime);

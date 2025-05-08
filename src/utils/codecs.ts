@@ -1,4 +1,9 @@
 import { getMediaSource } from './mediasource-helper';
+import { isHEVC } from './mp4-tools';
+
+export const userAgentHevcSupportIsInaccurate = () => {
+  return /\(Windows.+Firefox\//i.test(navigator.userAgent);
+};
 
 // from http://mp4ra.org/codecs.html
 // values indicate codec selection preference (lower is higher priority)
@@ -48,6 +53,7 @@ export const sampleEntryCodesISO = {
     avc4: 1,
     avcp: 1,
     av01: 0.8,
+    dav1: 0.8,
     drac: 1,
     dva1: 1,
     dvav: 1,
@@ -121,8 +127,12 @@ export function videoCodecPreferenceValue(
 }
 
 export function codecsSetSelectionPreferenceValue(codecSet: string): number {
+  const limitedHevcSupport = userAgentHevcSupportIsInaccurate();
   return codecSet.split(',').reduce((num, fourCC) => {
-    const preferenceValue = sampleEntryCodesISO.video[fourCC];
+    const lowerPriority = limitedHevcSupport && isHEVC(fourCC);
+    const preferenceValue = lowerPriority
+      ? 9
+      : sampleEntryCodesISO.video[fourCC];
     if (preferenceValue) {
       return (preferenceValue * 2 + num) / (num ? 3 : 2);
     }
@@ -192,6 +202,25 @@ export function getCodecCompatibleName(
   );
 }
 
+export function replaceVideoCodec(
+  originalCodecs: string | undefined,
+  newVideoCodec: string | undefined,
+): string | undefined {
+  const codecs: string[] = [];
+  if (originalCodecs) {
+    const allCodecs = originalCodecs.split(',');
+    for (let i = 0; i < allCodecs.length; i++) {
+      if (!isCodecType(allCodecs[i], 'video')) {
+        codecs.push(allCodecs[i]);
+      }
+    }
+  }
+  if (newVideoCodec) {
+    codecs.push(newVideoCodec);
+  }
+  return codecs.join(',');
+}
+
 export function pickMostCompleteCodecName(
   parsedCodec: string | undefined,
   levelCodec: string | undefined,
@@ -227,13 +256,11 @@ export function convertAVC1ToAVCOTI(videoCodecs: string): string {
   const codecs = videoCodecs.split(',');
   for (let i = 0; i < codecs.length; i++) {
     const avcdata = codecs[i].split('.');
-    if (avcdata.length > 2) {
-      let result = avcdata.shift() + '.';
-      result += parseInt(avcdata.shift() as string).toString(16);
-      result += (
-        '000' + parseInt(avcdata.shift() as string).toString(16)
-      ).slice(-4);
-      codecs[i] = result;
+    // only convert codec strings starting with avc1 (Examples: avc1.64001f,dvh1.05.07)
+    if (avcdata.length > 2 && avcdata[0] === 'avc1') {
+      codecs[i] = `avc1.${parseInt(avcdata[1]).toString(16)}${(
+        '000' + parseInt(avcdata[2]).toString(16)
+      ).slice(-4)}`;
     }
   }
   return codecs.join(',');
@@ -271,4 +298,8 @@ export function getM2TSSupportedAudioTypes(
       ? MediaSource.isTypeSupported('audio/mp4; codecs="ac-3"')
       : false,
   };
+}
+
+export function getCodecsForMimeType(mimeType: string): string {
+  return mimeType.replace(/^.+codecs=["']?([^"']+).*$/, '$1');
 }

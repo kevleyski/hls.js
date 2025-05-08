@@ -13,7 +13,7 @@ import M3U8Parser from '../../../src/loader/m3u8-parser';
 import { Level } from '../../../src/types/level';
 import { PlaylistLevelType } from '../../../src/types/loader';
 import { AttrList } from '../../../src/utils/attr-list';
-import { mockFragments } from '../../mocks/data';
+import { mockFragments as mockFragmentArray } from '../../mocks/data';
 import type { FragmentTracker } from '../../../src/controller/fragment-tracker';
 import type StreamController from '../../../src/controller/stream-controller';
 import type { MediaFragment } from '../../../src/loader/fragment';
@@ -29,6 +29,7 @@ describe('StreamController', function () {
   let fragmentTracker: FragmentTracker;
   let streamController: StreamController;
   const attrs: LevelAttributes = new AttrList({});
+  const mockFragments = mockFragmentArray as MediaFragment[];
 
   beforeEach(function () {
     fake = sinon.useFakeXMLHttpRequest();
@@ -49,7 +50,10 @@ describe('StreamController', function () {
   });
 
   const assertStreamControllerStarted = (streamController) => {
-    expect(streamController.hasInterval()).to.be.true;
+    expect(
+      streamController.hasInterval(),
+      `StreamController should be ticking. State: ${streamController.state}`,
+    ).to.be.true;
     expect(streamController.state).to.equal(
       State.IDLE,
       "StreamController's state should not be STOPPED",
@@ -57,7 +61,10 @@ describe('StreamController', function () {
   };
 
   const assertStreamControllerStopped = (streamController) => {
-    expect(streamController.hasInterval()).to.be.false;
+    expect(
+      streamController.hasInterval(),
+      `StreamController should be stopped. State: ${streamController.state}`,
+    ).to.be.false;
     expect(streamController.state).to.equal(
       State.STOPPED,
       "StreamController's state should be STOPPED",
@@ -89,6 +96,8 @@ describe('StreamController', function () {
       startTimeOffset,
       variableList,
     });
+    const playlistLoader = (hls as any).networkControllers[0];
+    (playlistLoader as any).checkAutostartLoad();
     return result;
   };
 
@@ -129,6 +138,12 @@ describe('StreamController', function () {
         networkDetails: {},
         stats: new LoadStats(),
         deliveryDirectives: null,
+        levelInfo: new Level({
+          name: '',
+          url: '',
+          attrs,
+          bitrate: 500000,
+        }),
       });
       expect(streamController['startPosition']).to.equal(130.5);
       expect(streamController['nextLoadPosition']).to.equal(130.5);
@@ -174,6 +189,12 @@ describe('StreamController', function () {
         networkDetails: {},
         stats: new LoadStats(),
         deliveryDirectives: null,
+        levelInfo: new Level({
+          name: '',
+          url: '',
+          attrs,
+          bitrate: 500000,
+        }),
       });
       expect(streamController['startPosition']).to.equal(18);
       expect(streamController['nextLoadPosition']).to.equal(18);
@@ -247,9 +268,6 @@ describe('StreamController', function () {
       let fragPrevious;
 
       beforeEach(function () {
-        // onLevelUpdated updates  latencyController.levelDetails used to get live sync position
-        hls['latencyController']['levelDetails'] = levelDetails;
-
         fragPrevious = new Fragment(PlaylistLevelType.MAIN, '');
         // Fragment with PDT 1505502681523 in level 1 does not have the same sn as in level 2 where cc is 1
         fragPrevious.cc = 0;
@@ -433,7 +451,7 @@ describe('StreamController', function () {
     });
   });
 
-  describe('checkBuffer', function () {
+  describe('seekToStartPos', function () {
     const sandbox = sinon.createSandbox();
     const bufStart = 5;
 
@@ -460,11 +478,6 @@ describe('StreamController', function () {
     });
     afterEach(function () {
       sandbox.restore();
-    });
-
-    it('should not throw when media is undefined', function () {
-      streamController['media'] = null;
-      streamController['checkBuffer']();
     });
 
     it('should seek to start pos when data is first loaded', function () {
@@ -496,19 +509,40 @@ describe('StreamController', function () {
       expect(seekStub).to.have.been.calledOnce;
     });
 
-    it('should not seek to start pos when metadata has been loaded', function () {
-      // @ts-ignore
-      const seekStub = sandbox.stub(streamController, 'seekToStartPos');
-      streamController['checkBuffer']();
-      expect(seekStub).to.have.not.been.called;
+    it('should seek to start pos when media is buffered and seek to segment boundary', function () {
+      streamController['config'].startOnSegmentBoundary = true;
+      streamController['startPosition'] = 7;
+      streamController['media']?.buffered;
+      streamController['media'] = {
+        buffered: {
+          start() {
+            return 5;
+          },
+          length: 1,
+        },
+        currentTime: 0,
+      } as any as HTMLMediaElement;
+
+      streamController['seekToStartPos']();
+      expect(streamController['media']!.currentTime).to.equal(5);
     });
 
-    it('should not seek to start pos when nothing has been buffered', function () {
-      // @ts-ignore
-      const seekStub = sandbox.stub(streamController, 'seekToStartPos');
-      (streamController['media']!.buffered as any).length = 0;
-      streamController['checkBuffer']();
-      expect(seekStub).to.have.not.been.called;
+    it('should seek to start pos when media is buffered and not seek to segment boundary', function () {
+      streamController['config'].startOnSegmentBoundary = false;
+      streamController['startPosition'] = 7;
+      streamController['media']?.buffered;
+      streamController['media'] = {
+        buffered: {
+          start() {
+            return 5;
+          },
+          length: 1,
+        },
+        currentTime: 0,
+      } as any as HTMLMediaElement;
+
+      streamController['seekToStartPos']();
+      expect(streamController['media']!.currentTime).to.equal(7);
     });
 
     describe('seekToStartPos', function () {

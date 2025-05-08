@@ -125,7 +125,7 @@ describe('ErrorController Integration Tests', function () {
         expectFatalErrorEventToStopPlayer(
           hls,
           ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR,
-          'no level with compatible codecs found in manifest',
+          'no level with compatible codecs found in manifest (one or more CODECS in variant not supported: ["avc9.000000,mp5a.40.2,av99.000000"])',
         ),
       );
     });
@@ -266,7 +266,9 @@ describe('ErrorController Integration Tests', function () {
       hls.loadSource('noSegmentsVod.m3u8');
       hls.stopLoad.should.have.been.calledOnce;
       return new Promise((resolve, reject) => {
-        hls.on(Events.ERROR, (event, data) => resolve(data));
+        hls.on(Events.ERROR, (event, data) =>
+          Promise.resolve().then(() => resolve(data)),
+        );
         hls.on(Events.LEVEL_LOADED, () =>
           reject(
             new Error(
