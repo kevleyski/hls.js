@@ -183,9 +183,9 @@ export type AudioSelectionOption = {
 export class AudioStreamController extends BaseStreamController implements NetworkComponentAPI {
     constructor(hls: Hls, fragmentTracker: FragmentTracker, keyLoader: KeyLoader);
     // (undocumented)
-    clearWaitingFragment(): void;
-    // (undocumented)
     doTick(): void;
+    // (undocumented)
+    protected getLoadPosition(): number;
     // (undocumented)
     protected _handleFragmentLoadComplete(fragLoadedData: FragLoadedData): void;
     // (undocumented)
@@ -434,7 +434,7 @@ export class BaseStreamController extends TaskLoop implements NetworkComponentAP
     // (undocumented)
     protected getFwdBufferInfoAtPos(bufferable: Bufferable | null, pos: number, type: PlaylistLevelType, maxBufferHole: number): BufferInfo | null;
     // (undocumented)
-    protected getInitialLiveFragment(levelDetails: LevelDetails, fragments: MediaFragment[]): MediaFragment | null;
+    protected getInitialLiveFragment(levelDetails: LevelDetails): MediaFragment | null;
     // (undocumented)
     getLevelDetails(): LevelDetails | undefined;
     // (undocumented)
@@ -1164,7 +1164,13 @@ export class EMEController extends Logger implements ComponentAPI {
     // (undocumented)
     destroy(): void;
     // (undocumented)
+    getKeySystemAccess(keySystemsToAttempt: KeySystems[]): Promise<void>;
+    // (undocumented)
+    getSelectedKeySystemFormats(): KeySystemFormats[];
+    // (undocumented)
     loadKey(data: KeyLoadedData): Promise<MediaKeySessionContext>;
+    // (undocumented)
+    selectKeySystem(keySystemsToAttempt: KeySystems[]): Promise<KeySystemFormats>;
     // (undocumented)
     selectKeySystemFormat(frag: Fragment): Promise<KeySystemFormats>;
 }
@@ -1180,6 +1186,7 @@ export type EMEControllerConfig = {
     drmSystems: DRMSystemsConfiguration;
     drmSystemOptions: DRMSystemOptions;
     requestMediaKeySystemAccessFunc: MediaKeyFunc | null;
+    requireKeySystemAccessOnStart: boolean;
 };
 
 // Warning: (ae-missing-release-tag) "ErrorActionFlags" is part of the package's API, but it is missing a release tag (@alpha, @beta, @public, or @internal)
@@ -2155,7 +2162,7 @@ export default Hls;
 //
 // @public (undocumented)
 export class HlsAssetPlayer {
-    constructor(HlsPlayerClass: typeof Hls, userConfig: Partial<HlsConfig>, interstitial: InterstitialEvent, assetItem: InterstitialAssetItem);
+    constructor(HlsPlayerClass: typeof Hls, userConfig: HlsAssetPlayerConfig, interstitial: InterstitialEvent, assetItem: InterstitialAssetItem);
     // (undocumented)
     get appendInPlace(): boolean;
     // (undocumented)
@@ -2197,6 +2204,8 @@ export class HlsAssetPlayer {
     // (undocumented)
     get remaining(): number;
     // (undocumented)
+    resetDetails(): void;
+    // (undocumented)
     resumeBuffering(): void;
     // (undocumented)
     get startOffset(): number;
@@ -2210,6 +2219,11 @@ export class HlsAssetPlayer {
     // (undocumented)
     transferMedia(): AttachMediaSourceData | null;
 }
+
+// Warning: (ae-missing-release-tag) "HlsAssetPlayerConfig" is part of the package's API, but it is missing a release tag (@alpha, @beta, @public, or @internal)
+//
+// @public (undocumented)
+export type HlsAssetPlayerConfig = Partial<HlsConfig> & Required<Pick<HlsConfig, 'assetPlayerId' | 'primarySessionId'>>;
 
 // Warning: (ae-missing-release-tag) "HlsChunkPerformanceTiming" is part of the package's API, but it is missing a release tag (@alpha, @beta, @public, or @internal)
 //
@@ -2233,6 +2247,7 @@ export type HlsConfig = {
     ignoreDevicePixelRatio: boolean;
     maxDevicePixelRatio: number;
     preferManagedMediaSource: boolean;
+    preserveManualLevelOnError: boolean;
     timelineOffset?: number;
     ignorePlaylistParsingErrors: boolean;
     loader: {
@@ -2978,7 +2993,7 @@ export class KeyLoader implements ComponentAPI {
     // (undocumented)
     load(frag: Fragment): Promise<KeyLoadedData>;
     // (undocumented)
-    loadClear(loadingFrag: Fragment, encryptedFragments: Fragment[]): void | Promise<void>;
+    loadClear(loadingFrag: Fragment, encryptedFragments: Fragment[]): null | Promise<void>;
     // (undocumented)
     loadInternal(frag: Fragment, keySystemFormat?: KeySystemFormats): Promise<KeyLoadedData>;
     // (undocumented)

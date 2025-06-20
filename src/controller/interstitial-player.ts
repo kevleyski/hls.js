@@ -20,6 +20,10 @@ export interface InterstitialPlayer {
   playingIndex: number;
   scheduleItem: InterstitialScheduleEventItem | null;
 }
+
+export type HlsAssetPlayerConfig = Partial<HlsConfig> &
+  Required<Pick<HlsConfig, 'assetPlayerId' | 'primarySessionId'>>;
+
 export class HlsAssetPlayer {
   public readonly hls: Hls;
   public readonly interstitial: InterstitialEvent;
@@ -32,7 +36,7 @@ export class HlsAssetPlayer {
 
   constructor(
     HlsPlayerClass: typeof Hls,
-    userConfig: Partial<HlsConfig>,
+    userConfig: HlsAssetPlayerConfig,
     interstitial: InterstitialEvent,
     assetItem: InterstitialAssetItem,
   ) {
@@ -41,7 +45,7 @@ export class HlsAssetPlayer {
     this.assetItem = assetItem;
     let uri: string = assetItem.uri;
     try {
-      uri = getInterstitialUrl(uri, hls.sessionId).href;
+      uri = getInterstitialUrl(uri, userConfig.primarySessionId).href;
     } catch (error) {
       // Ignore error parsing ASSET_URI or adding _HLS_primary_id to it. The
       // issue should surface as an INTERSTITIAL_ASSET_ERROR loading the asset.
@@ -232,6 +236,18 @@ export class HlsAssetPlayer {
   transferMedia() {
     this.bufferSnapShot();
     return this.hls.transferMedia();
+  }
+
+  resetDetails() {
+    const hls = this.hls;
+    if (this.hasDetails) {
+      hls.stopLoad();
+      const deleteDetails = (obj) => delete obj.details;
+      hls.levels.forEach(deleteDetails);
+      hls.allAudioTracks.forEach(deleteDetails);
+      hls.allSubtitleTracks.forEach(deleteDetails);
+      this.hasDetails = false;
+    }
   }
 
   on<E extends keyof HlsListeners, Context = undefined>(

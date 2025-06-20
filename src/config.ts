@@ -122,6 +122,7 @@ export type EMEControllerConfig = {
   drmSystems: DRMSystemsConfiguration;
   drmSystemOptions: DRMSystemOptions;
   requestMediaKeySystemAccessFunc: MediaKeyFunc | null;
+  requireKeySystemAccessOnStart: boolean;
 };
 
 export interface FragmentLoaderConstructor {
@@ -282,6 +283,7 @@ export type HlsConfig = {
   ignoreDevicePixelRatio: boolean;
   maxDevicePixelRatio: number;
   preferManagedMediaSource: boolean;
+  preserveManualLevelOnError: boolean;
   timelineOffset?: number;
   ignorePlaylistParsingErrors: boolean;
   loader: { new (confg: HlsConfig): Loader<LoaderContext> };
@@ -438,6 +440,7 @@ export const hlsDefaultConfig: HlsConfig = {
   requestMediaKeySystemAccessFunc: __USE_EME_DRM__
     ? requestMediaKeySystemAccess
     : null, // used by eme-controller
+  requireKeySystemAccessOnStart: false, // used by eme-controller
   testBandwidth: true,
   progressive: false,
   lowLatencyMode: true,
@@ -450,6 +453,7 @@ export const hlsDefaultConfig: HlsConfig = {
   interstitialAppendInPlace: true,
   interstitialLiveLookAhead: 10,
   useMediaCapabilities: __USE_MEDIA_CAPABILITIES__,
+  preserveManualLevelOnError: false,
 
   certLoadPolicy: {
     default: defaultLoadPolicy,

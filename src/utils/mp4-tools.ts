@@ -664,8 +664,6 @@ export function getSampleData(
     if (!track) {
       continue;
     }
-    let sampleCount: number | undefined;
-    let firstKeyFrame: number | undefined;
     const trackTimes: TrackTimes =
       tracks[id] ||
       (tracks[id] = {
@@ -722,73 +720,71 @@ export function getSampleData(
     let sampleDuration = defaultSampleDuration;
     for (let j = 0; j < truns.length; j++) {
       const trun = truns[j];
-      sampleCount = readUint32(trun, 4);
+      const sampleCount = readUint32(trun, 4);
+      const sampleIndex = trackTimes.sampleCount;
       trackTimes.sampleCount += sampleCount;
-      if (track.type === ElementaryStreamTypes.VIDEO) {
-        if (firstKeyFrame === undefined) {
-          firstKeyFrame = -1;
+      // Get duration from samples
+      const dataOffsetPresent = trun[3] & 0x01;
+      const firstSampleFlagsPresent = trun[3] & 0x04;
+      const sampleDurationPresent = trun[2] & 0x01;
+      const sampleSizePresent = trun[2] & 0x02;
+      const sampleFlagsPresent = trun[2] & 0x04;
+      const sampleCompositionTimeOffsetPresent = trun[2] & 0x08;
+      let offset = 8;
+      let remaining = sampleCount;
+      if (dataOffsetPresent) {
+        offset += 4;
+      }
+      if (firstSampleFlagsPresent && sampleCount) {
+        const isNonSyncSample = trun[offset + 1] & 0x01;
+        if (!isNonSyncSample && trackTimes.keyFrameIndex === undefined) {
+          trackTimes.keyFrameIndex = sampleIndex;
         }
-        const dataOffsetPresent = trun[3] & 0x01;
-        const firstSampleFlagsPresent = trun[3] & 0x04;
-        const sampleDurationPresent = trun[2] & 0x01;
-        const sampleSizePresent = trun[2] & 0x02;
-        const sampleFlagsPresent = trun[2] & 0x04;
-        const sampleCompositionTimeOffsetPresent = trun[2] & 0x08;
-        let offset = 8;
-        let remaining = sampleCount;
-        if (dataOffsetPresent) {
+        offset += 4;
+        if (sampleDurationPresent) {
+          sampleDuration = readUint32(trun, offset);
+          offset += 4;
+        } else {
+          sampleDuration = defaultSampleDuration;
+        }
+        if (sampleSizePresent) {
           offset += 4;
         }
-        if (firstSampleFlagsPresent && sampleCount) {
+        if (sampleCompositionTimeOffsetPresent) {
+          offset += 4;
+        }
+        sampleDTS += sampleDuration;
+        rawDuration += sampleDuration;
+        remaining--;
+      }
+      while (remaining--) {
+        if (sampleDurationPresent) {
+          sampleDuration = readUint32(trun, offset);
+          offset += 4;
+        } else {
+          sampleDuration = defaultSampleDuration;
+        }
+        if (sampleSizePresent) {
+          offset += 4;
+        }
+        if (sampleFlagsPresent) {
           const isNonSyncSample = trun[offset + 1] & 0x01;
           if (!isNonSyncSample) {
-            firstKeyFrame = 0;
+            if (trackTimes.keyFrameIndex === undefined) {
+              trackTimes.keyFrameIndex =
+                trackTimes.sampleCount - (remaining + 1);
+              trackTimes.keyFrameStart = sampleDTS;
+            }
           }
           offset += 4;
-          if (sampleDurationPresent) {
-            sampleDuration = readUint32(trun, offset);
-            offset += 4;
-          } else {
-            sampleDuration = defaultSampleDuration;
-          }
-          if (sampleSizePresent) {
-            offset += 4;
-          }
-          if (sampleCompositionTimeOffsetPresent) {
-            offset += 4;
-          }
-          sampleDTS += sampleDuration;
-          rawDuration += sampleDuration;
-          remaining--;
         }
-        while (remaining--) {
-          if (sampleDurationPresent) {
-            sampleDuration = readUint32(trun, offset);
-            offset += 4;
-          } else {
-            sampleDuration = defaultSampleDuration;
-          }
-          if (sampleSizePresent) {
-            offset += 4;
-          }
-          if (sampleFlagsPresent) {
-            const isNonSyncSample = trun[offset + 1] & 0x01;
-            if (!isNonSyncSample) {
-              if (firstKeyFrame === -1) {
-                firstKeyFrame = sampleCount - (remaining + 1);
-                trackTimes.keyFrameStart = sampleDTS;
-              }
-            }
-            offset += 4;
-          }
-          if (sampleCompositionTimeOffsetPresent) {
-            offset += 4;
-          }
-          sampleDTS += sampleDuration;
-          rawDuration += sampleDuration;
+        if (sampleCompositionTimeOffsetPresent) {
+          offset += 4;
         }
-        trackTimes.keyFrameIndex = firstKeyFrame;
-      } else {
+        sampleDTS += sampleDuration;
+        rawDuration += sampleDuration;
+      }
+      if (!rawDuration && defaultSampleDuration) {
         rawDuration += defaultSampleDuration * sampleCount;
       }
     }
@@ -1450,26 +1446,38 @@ function parsePssh(view: DataView): PsshData | PsshInvalidResult {
   const systemId = Hex.hexDump(
     new Uint8Array(buffer, offset + 12, 16),
   ) as KeySystemIds;
-  const dataSizeOrKidCount = view.getUint32(28);
+
   let kids: null | Uint8Array[] = null;
   let data: null | Uint8Array = null;
+  let dataSizeOffset = 0;
+
   if (version === 0) {
-    if (size - 32 < dataSizeOrKidCount || dataSizeOrKidCount < 22) {
-      return { offset, size };
-    }
-    data = new Uint8Array(buffer, offset + 32, dataSizeOrKidCount);
+    dataSizeOffset = 28;
   } else if (version === 1) {
-    if (
-      !dataSizeOrKidCount ||
-      length < offset + 32 + dataSizeOrKidCount * 16 + 16
-    ) {
+    const kidCounts = view.getUint32(28);
+    if (!kidCounts || length < 32 + kidCounts * 16) {
       return { offset, size };
     }
     kids = [];
-    for (let i = 0; i < dataSizeOrKidCount; i++) {
+    for (let i = 0; i < kidCounts; i++) {
       kids.push(new Uint8Array(buffer, offset + 32 + i * 16, 16));
     }
+    dataSizeOffset = 32 + kidCounts * 16;
   }
+
+  if (!dataSizeOffset) {
+    return { offset, size };
+  }
+
+  const dataSizeOrKidCount = view.getUint32(dataSizeOffset);
+  if (size - 32 < dataSizeOrKidCount) {
+    return { offset, size };
+  }
+  data = new Uint8Array(
+    buffer,
+    offset + dataSizeOffset + 4,
+    dataSizeOrKidCount,
+  );
   return {
     version,
     systemId,
