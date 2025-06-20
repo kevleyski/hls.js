@@ -1,5 +1,7 @@
 # Kev's HLS.js implementation notes
 
+Frame accuracy, known when PTS is known otherwise needs a new monge in DTS/PTSdule to detect cha
+
 ### `audio-track-controller.ts`
 
 managing the audio tracks that are available in the HLS manifest. It allows the user to select a specific audio track and ensures that the correct audio data is loaded and played. It works in conjunction with the `audio-stream-controller.ts` to handle the actual streaming of the audio data.
@@ -162,5 +164,3 @@ managing the timeline of the HLS stream. It keeps track of the current playback 
 4. **Codec Switching**:
    - For platforms that support it, hls.js can switch codecs without recreating SourceBuffers using `changeType`.
    - This enables more efficient quality switching and handling of streams with mixed codecs.
-
-The MSE interactions form the core of hls.js, enabling it to perform adaptive bitrate streaming, handle discontinuities, support multiple audio tracks, and recover from network issues - all while maintaining a smooth viewing experience.
